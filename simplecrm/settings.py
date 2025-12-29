@@ -271,7 +271,12 @@ CHANNEL_LAYERS = {
 }
 
 load_dotenv()
+# IMPORTANT for Celery 6+
+broker_connection_retry_on_startup = True
 
+# Optional but recommended
+broker_connection_retry = True
+broker_connection_max_retries = None 
 AZURE_REDIS_HOST = 'whatsappnuren.redis.cache.windows.net'
 AZURE_REDIS_PORT = 6379
 AZURE_REDIS_PASSWORD = os.getenv('AZURE_REDIS_PASSWORD')
