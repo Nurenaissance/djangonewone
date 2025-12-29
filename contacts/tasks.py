@@ -1,6 +1,7 @@
 from celery import shared_task
 from .models import Contact
 import logging
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ def update_contact_last_seen(self, phone, update_type, time, tenant):
         if not all([phone, update_type, tenant]):
             raise ValueError("Missing required parameters")
 
-        now = time
+        now = timezone.now()
         contact = Contact.objects.filter(phone=phone, tenant_id=tenant).first()
         print("Contact found: ", contact)
         if not contact:

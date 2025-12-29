@@ -25,6 +25,9 @@ from django.utils import timezone
 import json
 import logging
 from typing import List, Dict
+import base64
+
+
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -119,8 +122,8 @@ def save_conversations(request, contact_id):
 
         # Asynchronous processing with error tracking
         safe_payload = json.loads(json.dumps(payload, default=str))
-
-        process_conversations.delay(safe_payload, key)
+        safe_key = base64.b64encode(key).decode()
+        process_conversations.delay(safe_payload, safe_key)
         print("process convo: ")
         
         return JsonResponse({"message": "Conversations queued for processing"}, status=202)

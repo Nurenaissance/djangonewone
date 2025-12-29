@@ -7,6 +7,7 @@ from cryptography.hazmat.backends import default_backend
 import os
 import json
 from django.utils import timezone
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -14,41 +15,50 @@ logger = logging.getLogger(__name__)
 def process_conversations(self, payload, key):
     try:
         print("tasks PRocessing conv")
+
+        # ✅ Decode Base64 key
+        if isinstance(key, str):
+            key = base64.b64decode(key)
+
+        assert isinstance(key, (bytes, bytearray)), "Encryption key is not bytes"
+        assert len(key) in (16, 24, 32), "Invalid AES key length"
+
         with transaction.atomic():
             contact_id = payload['contact_id']
             conversations = payload['conversations']
             tenant = payload['tenant']
             source = payload['source']
             bpid = payload['business_phone_number_id']
-            
-            if isinstance(key, memoryview):
-                key = bytes(key)
+            timestamp = payload['time']
 
-            encryption_key = key    
-            print("Type okey: ", type(encryption_key))
-            # Bulk create conversations (in batches to avoid overwhelming DB)
-            batch_size = 100  # Adjust the batch size if needed
+            batch_size = 100
             for i in range(0, len(conversations), batch_size):
                 batch = conversations[i:i + batch_size]
+
                 conversations_to_create = [
                     Conversation(
-                        contact_id=contact_id, 
-                        # message_text=message.get('text', ''),
-                        encrypted_message_text = encrypt_data(data=message.get('text', ''), key=encryption_key),
+                        contact_id=contact_id,
+                        encrypted_message_text=encrypt_data(
+                            data=message.get('text', ''),
+                            key=key
+                        ),
                         sender=message.get('sender', ''),
                         tenant_id=tenant,
                         source=source,
                         business_phone_number_id=bpid,
-                        date_time = timezone.now()
-                    ) for message in batch
+                        date_time=timestamp
+                    )
+                    for message in batch
                 ]
+
                 Conversation.objects.bulk_create(conversations_to_create)
-                return True
+
+        print("✅ Conversations saved successfully")
+        return True
 
     except Exception as exc:
-        logger.error(f"Error processing conversations: {exc}")
-        # Retry with exponential backoff
-        self.retry(exc=exc, countdown=2 ** self.request.retries)
+        logger.error(f"❌ Error processing conversations: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
 def encrypt_data(data, key):
     data_str = json.dumps(data)
