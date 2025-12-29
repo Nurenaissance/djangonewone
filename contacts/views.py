@@ -11,6 +11,8 @@ from django.views.decorators.csrf import csrf_exempt
 from helpers.tables import get_db_connection
 from whatsapp_chat.models import WhatsappTenantData
 from .tasks import update_contact_last_seen
+from django.utils import timezone
+
 
 
 from rest_framework.views import APIView
@@ -441,7 +443,7 @@ def updateLastSeen(request, phone, type):
         body = json.loads(request.body)
         raw_time = body.get("time")
         print("Raw Time: ", raw_time)
-        formatted_timestamp = convert_time(raw_time)
+        formatted_timestamp = timezone.now()
         print("Formatted Time Stamp: ", formatted_timestamp)
         
         bpid = request.headers.get('bpid')

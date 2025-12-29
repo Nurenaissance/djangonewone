@@ -21,7 +21,7 @@ from django.utils.timezone import make_aware
 import re
 import logging
 logger = logging.getLogger('simplecrm')
-
+from django.utils import timezone
 import json
 import logging
 from typing import List, Dict
@@ -103,7 +103,7 @@ def save_conversations(request, contact_id):
             try:
                 postgres_timestamp = convert_time(raw_time)
                 
-                payload['time'] = postgres_timestamp
+                payload['time'] = timezone.now()
                 
             except ValueError as e:
                 print(f"Error processing time: {e}")
@@ -118,7 +118,9 @@ def save_conversations(request, contact_id):
         print("payload: ", payload, key)
 
         # Asynchronous processing with error tracking
-        process_conversations.delay(payload, key)
+        safe_payload = json.loads(json.dumps(payload, default=str))
+
+        process_conversations.delay(safe_payload, key)
         print("process convo: ")
         
         return JsonResponse({"message": "Conversations queued for processing"}, status=202)
