@@ -92,45 +92,41 @@ def bulk_create_with_batching(objects: List, batch_size: int = 500):
 
 # Encrypt the data using AES symmetric encryption
 # IMP: Saves conversation, takes in data from whatsappbotserver, saves data in db using redis
+import threading
+
+def async_process(payload, key):
+    try:
+        process_conversations(payload, key)
+    except Exception as e:
+        print("Async error:", e)
+
+
 @csrf_exempt
 def save_conversations(request, contact_id):
     try:
-        # Enhanced rate limiting with sliding window
-        # print("checking rate limit")
-        # if not check_rate_limit(request):
-        #     return JsonResponse({'error': 'Rate limit exceeded'}, status=429)
-        # print("Starting")
         payload = extract_payload(request)
-        if 'time' in payload:
-            raw_time = payload['time']
-            try:
-                postgres_timestamp = convert_time(raw_time)
-                
-                payload['time'] = timezone.now()
-                
-            except ValueError as e:
-                print(f"Error processing time: {e}")
+        payload['time'] = timezone.now()
 
-        tenant_id = payload['tenant']
-        tenant = Tenant.objects.get(id = tenant_id)
-        key = tenant.key
-        
-        if isinstance(key, memoryview):
-            key = bytes(key)
+        tenant = Tenant.objects.get(id=payload['tenant'])
+        key = bytes(tenant.key)
 
-        print("payload: ", payload, key)
-
-        # Asynchronous processing with error tracking
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode()
-        process_conversations.delay(safe_payload, safe_key)
-        print("process convo: ")
-        
-        return JsonResponse({"message": "Conversations queued for processing"}, status=202)
-    
+
+        # 🚀 Fire & forget
+        threading.Thread(
+            target=async_process,
+            args=(safe_payload, safe_key),
+            daemon=True
+        ).start()
+
+        return JsonResponse(
+            {"message": "Conversation accepted"},
+            status=202
+        )
+
     except Exception as e:
         return handle_error(e)
-
 # def check_rate_limit(request, max_requests: int = 100, window: int = 60) -> bool:
 #     """Implement sliding window rate limiting"""
 #     client_ip = get_client_ip(request)

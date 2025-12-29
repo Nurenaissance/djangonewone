@@ -428,56 +428,45 @@ def convert_time(datetime_str):
         return None
     
 
+import threading
+
+def async_last_seen(phone, type, time, tenant):
+    try:
+        update_contact_last_seen(phone, type, time, tenant)
+    except Exception as e:
+        logger.error(f"Async last_seen failed: {e}")
+
+
 @csrf_exempt
 @require_http_methods(["PATCH"])
 def updateLastSeen(request, phone, type):
-    """
-    Queue a last seen update for asynchronous processing
-    
-    :param request: HTTP request
-    :param phone: Phone number of the contact
-    :param type: Type of update (seen/delivered/replied)
-    :return: JSON response
-    """
     try:
-        body = json.loads(request.body)
-        raw_time = body.get("time")
-        print("Raw Time: ", raw_time)
         formatted_timestamp = timezone.now()
-        print("Formatted Time Stamp: ", formatted_timestamp)
-        
-        bpid = request.headers.get('bpid')
-        whatsapp_tenant_data = WhatsappTenantData.objects.filter(business_phone_number_id = bpid).first()
+
+        bpid = request.headers.get("bpid")
+        whatsapp_tenant_data = WhatsappTenantData.objects.filter(
+            business_phone_number_id=bpid
+        ).first()
+
         tenant_id = whatsapp_tenant_data.tenant_id
-        valid_types = ["seen", "delivered", "replied"]
-        if type not in valid_types:
-            return JsonResponse({
-                "error": f"Invalid update type: {type}. Must be one of: " + ", ".join(valid_types)
-            }, status=400)
-        
-        task = update_contact_last_seen.delay(phone, type, formatted_timestamp, tenant_id)
-        logger.info(f"Task queued successfully - Task ID: {task.id}")
-        
+
+        threading.Thread(
+            target=async_last_seen,
+            args=(phone, type, formatted_timestamp, tenant_id),
+            daemon=True
+        ).start()
+
         return JsonResponse({
-            "success": True, 
-            "message": "Update queued for processing",
-            "task_id": task.id
+            "success": True,
+            "message": "Update accepted"
         }, status=202)
-    
-    
-    except json.JSONDecodeError:
-        logger.error("Invalid JSON in request body")
-        return JsonResponse({"error": "Invalid JSON in request body"}, status=400)
-    
+
     except Exception as e:
-        logger.error(f"Unexpected error in updateLastSeen: {e}")
-        
         return JsonResponse({
-            "error": "Internal server error", 
+            "error": "Internal server error",
             "details": str(e)
         }, status=500)
-    
-    
+   
 # Optional: Task status checking view
 def check_task_status(request, task_id):
     """
