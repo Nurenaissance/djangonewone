@@ -1,0 +1,303 @@
+from django.contrib.auth.models import User
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+import json
+from django.contrib.auth import authenticate
+from .models import CustomUser
+from tenant.models import Tenant 
+from django.contrib.auth import logout
+from django.db import connections
+from django.db import connection, IntegrityError
+import logging
+from django.shortcuts import get_object_or_404
+logger = logging.getLogger(__name__)
+import json
+import uuid
+import secrets
+from django.http import JsonResponse
+from django.db import IntegrityError, transaction
+from django.contrib.auth import get_user_model
+import os
+def generate_symmetric_key():
+    return os.urandom(32)   # ✅ bytes
+
+
+
+CustomUser = get_user_model()
+@csrf_exempt
+def register_tenant(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        email = data.get('email')
+        phone = data.get('phone')
+        password = data.get('password')
+
+        if not password or not (email or phone):
+            return JsonResponse(
+                {'msg': 'Email or phone and password are required'},
+                status=400
+            )
+
+        # Prevent duplicate users
+        if email and CustomUser.objects.filter(email=email).exists():
+            return JsonResponse({'msg': 'Email already registered'}, status=400)
+
+        if phone and CustomUser.objects.filter(phone_number=phone).exists():
+            return JsonResponse({'msg': 'Phone already registered'}, status=400)
+
+        # Generate tenant data
+        tenant_id = uuid.uuid4().hex[:12]
+        organization = f"org_{tenant_id}"
+        db_password = secrets.token_urlsafe(16)
+        key = generate_symmetric_key()
+
+        with transaction.atomic():
+            # Create Tenant
+            tenant = Tenant.objects.create(
+                id=tenant_id,
+                organization=organization,
+                db_user=f"crm_tenant_{tenant_id}",
+                db_user_password=db_password,
+                key=key
+            )
+
+            # Create Admin User
+            user = CustomUser.objects.create_user(
+                username=email or phone,
+                email=email,
+                phone_number=phone,
+                password=password,
+                role=CustomUser.ADMIN,
+                organization=organization,
+                tenant=tenant
+            )
+
+            # Create PostgreSQL role
+           
+        return JsonResponse({
+            'msg': 'Tenant and admin user created successfully',
+            'tenant_id': tenant_id,
+            'organization': organization
+        })
+
+    except IntegrityError as e:
+        return JsonResponse({'msg': str(e)}, status=500)
+    except Exception as e:
+        return JsonResponse({'msg': str(e)}, status=500)
+
+
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        username = data.get('username')
+        email = data.get('email')
+        phone = data.get('phone')
+        password = data.get('password')
+        # role = data.get('role', CustomUser.EMPLOYEE)  # Default role to employee if not provided
+        organization = data.get('organisation')
+        tenant_name = data.get('tenant')
+        role = CustomUser.ADMIN
+        
+        if not username:
+            print("Missing field: username")
+        if not email:
+            print("Missing field: email")
+        if not phone:
+            print("Missing field: phone")
+        if not password:
+            print("Missing field: password")
+        if not organization:
+            print("Missing field: organisation")
+        if not tenant_name:
+            print("Missing field: tenant_name")
+    
+        if not (username and email and password and organization and tenant_name and phone):
+            print("One or more required fields are missing")
+            return JsonResponse({'msg': 'Missing required fields'}, status=400)
+        
+        if CustomUser.objects.filter(username=username).exists():
+            return JsonResponse({'msg': 'Username already exists'}, status=400)
+        
+        try:
+            tenant = Tenant.objects.get(id=tenant_name)
+        except Tenant.DoesNotExist:
+            return JsonResponse({'msg': 'Specified tenant does not exist'}, status=400)
+        
+        # Create a new user with the specified role, organization, and tenant
+        user = CustomUser.objects.create_user(username=username, email=email, password=password, role=role, organization=organization, tenant=tenant, phone_number = phone)
+
+        # Create a corresponding PostgreSQL role for the userx``
+        try:
+            with connection.cursor() as cursor:
+                
+                sql_role_name = f"crm_tenant_{role}"
+                
+                cursor.execute(f"CREATE ROLE {username} WITH LOGIN PASSWORD %s IN ROLE {sql_role_name};", [password])
+                cursor.execute(f"GRANT {sql_role_name} TO {username};")
+                
+        except IntegrityError as e:
+            return JsonResponse({'msg': f'Error creating role: {str(e)}'}, status=500)
+        except Exception as e:
+            return JsonResponse({'msg': f'Unexpected error: {str(e)}'}, status=500)
+
+        return JsonResponse({'msg': 'User registered successfully'})
+    else:
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+
+from .models import CustomUser
+@csrf_exempt
+def change_password(request):
+    if request.method == 'POST':
+        print("req: ", request)
+        data = json.loads(request.body)
+        print(data)
+        username = data.get('username')
+        new_password = data.get('newPassword')
+        phone = data.get('phone')
+        print(username, new_password)
+        try:
+            # Retrieve the user by username
+            u = CustomUser.objects.get(username = username)
+            print(u)
+            if new_password:
+                u.set_password(new_password)
+                u.save()
+                return JsonResponse({'message': 'Password changed successfully'}, status=200)
+            elif phone:
+                if phone == u.phone_number:
+                    return JsonResponse({} ,status = 200)
+                else:
+                    return JsonResponse({'message': 'Please enter registered phone number'}, status = 500)
+        except CustomUser.DoesNotExist:
+            return JsonResponse({'error': 'User does not exist'}, status=404)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
+
+@csrf_exempt
+def verifyUser(request):
+    if request.method == 'POST':
+        print("req: ", request)
+        data = json.loads(request.body)
+        print(data)
+        username = data.get('username')
+        phone = data.get('phone')
+        print(username, phone)
+
+
+class LoginView(APIView):
+    def post(self, request):
+        data = request.data
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not (username and password):
+            return Response({'msg': 'Missing required fields'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = authenticate(username=username, password=password)
+        print("user logged in is", user)
+        if user:
+            tenant_id = user.tenant.id  # Get tenant ID
+            user_id = user.id
+            role = user.role
+            
+            response_data = {
+                'tenant_id': tenant_id,
+                'user_id': user_id,
+                'role':role,
+                'msg': 'Login successful'
+            }
+            print("user data",response_data)
+            return Response(response_data, status=status.HTTP_200_OK)
+        else:
+            logger.error(f"Authentication failed for username: {username}")
+            return Response({'msg': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+class LogoutView(APIView):
+    def post(self, request):
+        # Log out Django user session
+        logout(request)
+        
+        tenant_id = request.headers.get('X-Tenant-Id')
+        print("Logging out tenant:", tenant_id)
+
+        try:
+            connection = connections['default']
+            cursor = connection.cursor()
+            # Clear tenant session variable
+            cursor.execute("RESET my.tenant_id")
+            cursor.close()
+            # Close connection to clear session state
+            connection.close()
+            logger.debug("Cleared tenant session variable and closed DB connection on logout")
+        except Exception as e:
+            logger.error(f"Error clearing tenant session variable on logout: {e}")
+
+        return Response({'msg': 'Logout successful'}, status=200)
+
+# class LogoutView(APIView):
+#     def post(self, request):
+#         # Log out the user
+#         logout(request)
+#         tenant_id = request.headers.get('X-Tenant-Id')
+#         print("logging out tenant ", tenant_id)
+#         # Reset the database connection to default superuser
+#         connection = connections['default']
+#         connection.settings_dict.update({
+#             'USER': 'nurenai',
+#             'PASSWORD': 'Biz1nurenWar*',
+#         })
+#         connection.close()
+#         connection.connect()
+#         logger.debug("Database connection reset to default superuser")
+        
+#         return Response({'msg': 'Logout successful'}, status=status.HTTP_200_OK)
+
+# class LoginView(APIView):
+#     def post(self, request):
+#         data = request.data
+#         username = data.get('username')
+#         password = data.get('password')
+        
+#         if not (username and password):
+#             return Response({'msg': 'Missing required fields'}, status=status.HTTP_400_BAD_REQUEST)
+        
+#         # Authenticate user
+#         user = authenticate(username=username, password=password)
+#         print("user logged in is", user)
+#         if user:
+#             # Check user's role and tenant
+#             role = user.role
+#             tenant_id = user.tenant.id  # Get the tenant ID associated with the user
+#             user_id = user.id  # Get the user ID of the logged-in user
+
+#             response_data = {
+#                 'tenant_id': tenant_id,
+#                 'user_id': user_id,
+#                 'role': role
+#             }
+#             print("response data: " , response_data)
+#             if role == CustomUser.ADMIN:
+#                 # Show admin views
+#                 response_data['msg'] = 'Login successful as admin'
+#             elif role == CustomUser.MANAGER:
+#                 # Show manager views
+#                 response_data['msg'] = 'Login successful as manager'
+#             else:
+#                 # Show employee views
+#                 response_data['msg'] = 'Login successful as employee'
+            
+#             return Response(response_data, status=status.HTTP_200_OK)
+#         else:
+#             logger.error(f"Authentication failed for username: {username}")
+#             return Response({'msg': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
