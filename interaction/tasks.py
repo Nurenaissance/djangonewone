@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import os
 import json
+from django.utils import timezone
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ def process_conversations(self, payload, key):
                         tenant_id=tenant,
                         source=source,
                         business_phone_number_id=bpid,
-                        date_time = payload['time']
+                        date_time = timezone.now()
                     ) for message in batch
                 ]
                 Conversation.objects.bulk_create(conversations_to_create)
