@@ -21,12 +21,22 @@ class WAConversation(models.Model):
 class WhatsappTenantData(models.Model):
     id = models.AutoField(primary_key=True)
     business_phone_number_id = models.BigIntegerField(primary_key=False)
+
+    # LEGACY FIELDS (keep for backward compatibility)
     flow_data = models.JSONField(null=True, blank=True)
     adj_list = models.JSONField(null=True, blank=True)
+    start = models.IntegerField(null=True, blank=True)
+
+    # NEW FIELDS for simplified flow system (v2)
+    nodes = models.JSONField(null=True, blank=True)  # Frontend nodes directly
+    edges = models.JSONField(null=True, blank=True)  # Frontend edges directly
+    flow_version = models.IntegerField(default=1)    # 1=legacy, 2=new
+    start_node_id = models.CharField(max_length=100, null=True, blank=True)  # String ID for new mode
+
+    # COMMON FIELDS
     access_token = models.CharField(max_length=300)
     updated_at = models.DateTimeField(auto_now=True)
     business_account_id = models.BigIntegerField()
-    start = models.IntegerField(null=True, blank=True)
     fallback_count = models.IntegerField(null=True, blank=True)
     fallback_message = models.CharField(max_length=1000, null=True, blank=True)
     flow_name = models.CharField(max_length=200, null=True, blank=True)

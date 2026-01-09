@@ -41,7 +41,15 @@ from simplecrm.auth_oauth import oauth_token
 from shop import views as shop_views
 from helpers import tables
 from orders import views as orderviews
-from whatsapp_campaigns.views import WhatsappCampaignView
+from whatsapp_campaigns.views import (
+    WhatsappCampaignView,
+    MessageTemplateListCreateView,
+    MessageTemplateDetailView,
+    CampaignListCreateView,
+    CampaignDetailView,
+    BroadcastGroupListCreateView,
+    BroadcastGroupDetailView
+)
 from subscriptions import views as sub_views
 from facebook_flows import views as flow_view
 from wabits import views as wabits
@@ -129,6 +137,18 @@ urlpatterns = [
     path('orders/', orderviews.OrderListAPIView.as_view(), name='order-list'),
     path('orders/<int:pk>/', orderviews.OrderDetailAPIView.as_view(), name='order-detail'),
     path('campaign/', WhatsappCampaignView.as_view(), name='campaign_api'),
+
+    # MessageTemplate CRUD endpoints
+    path('templates/', MessageTemplateListCreateView.as_view(), name='template-list-create'),
+    path('templates/<str:template_id>/', MessageTemplateDetailView.as_view(), name='template-detail'),
+
+    # Campaign CRUD endpoints
+    path('campaigns/', CampaignListCreateView.as_view(), name='campaign-list-create'),
+    path('campaigns/<str:campaign_id>/', CampaignDetailView.as_view(), name='campaign-detail'),
+
+    # BroadcastGroup CRUD endpoints
+    path('broadcast-groups/', BroadcastGroupListCreateView.as_view(), name='broadcast-group-list-create'),
+    path('broadcast-groups/<int:group_id>/', BroadcastGroupDetailView.as_view(), name='broadcast-group-detail'),
     path('message-stat/', message_stats.MessageStatisticsView.as_view(), name = 'message_statistics'),
     path('individual_message_statistics/', message_stats.IndividualMessageStatisticsView.as_view(), name='individual_message_statistics_list'),  # For listing and creating
     path('refresh-status/', message_stats.refresh_status, name="refresh-status"),

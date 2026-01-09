@@ -17,7 +17,84 @@ from helpers.tables import get_db_connection
 from datetime import datetime, timedelta
 
 
-# converts node template data into whatsapp tenant data
+def process_flow_v2(flow, tenant):
+    """
+    New simplified flow processor - stores nodes and edges directly
+    without ID conversion or node expansion.
+
+    This function processes flow data in the new v2 format, eliminating the complexity
+    of ID conversion and node expansion used in the legacy convert_flow function.
+
+    Args:
+        flow (dict): Frontend flow with {nodes: [...], edges: [...]}
+        tenant (object): Tenant object
+
+    Returns:
+        tuple: (nodes, edges, start_node_id, collected_fields)
+            - nodes: List of node objects from frontend (unchanged)
+            - edges: List of edge objects from frontend (unchanged)
+            - start_node_id: String ID of the starting node
+            - collected_fields: List of field definitions for dynamic model creation
+    """
+    try:
+        print("Processing flow v2 (new mode)")
+        nodes = flow.get('nodes', [])
+        edges = flow.get('edges', [])
+        fields = []
+        start_node_id = None
+
+        # Find start node from edges
+        for edge in edges:
+            if edge.get('source') == 'start':
+                start_node_id = edge.get('target')
+                break
+
+        if not start_node_id:
+            print("Warning: No start node found in edges")
+            # Fallback: use first non-start node
+            for node in nodes:
+                if node.get('type') != 'start':
+                    start_node_id = node.get('id')
+                    break
+
+        # Extract dynamic model fields from askQuestion nodes
+        for node in nodes:
+            node_type = node.get('type')
+            if node_type == 'askQuestion':
+                data = node.get('data', {})
+                variable = data.get('variable')
+                data_type = data.get('dataType', 'string')
+
+                if variable:
+                    # Map frontend dataType to database field type
+                    field_type_mapping = {
+                        'string': 'string',
+                        'number': 'integer',
+                        'integer': 'integer',
+                        'text': 'text',
+                        'boolean': 'boolean',
+                        'date': 'date',
+                        'bigint': 'bigint'
+                    }
+
+                    db_field_type = field_type_mapping.get(data_type.lower(), 'string')
+
+                    fields.append({
+                        'field_name': variable,
+                        'field_type': db_field_type
+                    })
+
+        print(f"Flow v2 processed: {len(nodes)} nodes, {len(edges)} edges, start: {start_node_id}, fields: {len(fields)}")
+        return nodes, edges, start_node_id, fields
+
+    except Exception as e:
+        print(f"Error in process_flow_v2: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None, None
+
+
+# converts node template data into whatsapp tenant data (LEGACY)
 def convert_flow(flow, tenant):
     """
         Converts a flow configuration into a structured node graph with adjacency list representation.
@@ -452,66 +529,111 @@ def insert_whatsapp_tenant_data(request):
 
         else:
             node_template_id = data.get('node_template_id')
+            use_v2 = data.get('use_flow_v2', False)  # Frontend flag for new mode
+
             node_template = NodeTemplate.objects.get(id = node_template_id)
             node_data = node_template.node_data
             flow_name = node_template.name
             fallback_count = node_template.fallback_count
             fallback_message = node_template.fallback_msg
+
             if node_data is not None:
                 try:
-                    
                     print("Node Data: ", node_data)
-                    flow_data, adj_list, start, dynamicModelFields = convert_flow(node_data, tenant)
-                    
-                    dynamicModelFields.append({ 'field_name': 'phone_no', 'field_type': 'bigint'})
-                    
-                    flow_name = DynamicModelListView.sanitize_model_name(model_name=flow_name)
-                    print("new flow name: ", flow_name)
-                    model_name= flow_name
-                    fields = dynamicModelFields
-                    print("model name: ", model_name, fields)
-                    # create_dynamic_model(model_name=model_name, fields=fields,tenant_id=tenant_id)
-                    createDynamicModel(model_name, fields, tenant_id)
 
-                    #updating whatsapp_tenant_flow with flow_data and adj_list
-                    # query = '''
-                    # UPDATE whatsapp_tenant_data
-                    # SET flow_data = %s, adj_list = %s, start = %s, fallback_message = %s, fallback_count = %s, flow_name = %s
-                    # WHERE business_phone_number_id = %s
-                    # '''
-                    # print("adj listt: ", adj_list, flow_data, start)
-                    # with connection.cursor() as cursor:
-                    #     print("Executing query:", query, json.dumps(flow_data), json.dumps(adj_list), start, fallback_message, fallback_count, flow_name ,business_phone_number_id)
-                    #     cursor.execute(query, [json.dumps(flow_data), json.dumps(adj_list), start, fallback_message, fallback_count, flow_name ,business_phone_number_id])
-                    #     connection.commit()  # Commit the transaction
+                    # DUAL MODE DETECTION
+                    if use_v2:
+                        print("Using NEW flow system (v2)")
+                        nodes, edges, start_node_id, dynamicModelFields = process_flow_v2(node_data, tenant)
 
-                    # return JsonResponse({'message': 'Data updated successfully'})
-                    whatsapp_data = WhatsappTenantData.objects.filter(tenant_id = tenant_id)
-                    en_records = whatsapp_data.filter(language = 'en')
+                        if nodes is None:
+                            return JsonResponse({'status': 'error', 'message': 'Flow v2 processing failed'}, status=500)
 
-                    instance_to_update = en_records.order_by('id').first()
+                        # Add phone_no field
+                        dynamicModelFields.append({'field_name': 'phone_no', 'field_type': 'bigint'})
 
-                    instance_to_update.flow_data = flow_data
-                    instance_to_update.hop_nodes = hop_nodes
-                    instance_to_update.adj_list = adj_list
-                    instance_to_update.start = start
-                    instance_to_update.fallback_count = fallback_count
-                    instance_to_update.fallback_message = fallback_message
-                    instance_to_update.flow_name = flow_name
-                    instance_to_update.updated_at = timezone.now()
-                    instance_to_update.introductory_msg = None
-                    instance_to_update.multilingual = False
-                    instance_to_update.save()
+                        # Sanitize flow name and create dynamic model
+                        flow_name_sanitized = DynamicModelListView.sanitize_model_name(model_name=flow_name)
+                        print("new flow name: ", flow_name_sanitized)
+                        createDynamicModel(flow_name_sanitized, dynamicModelFields, tenant_id)
 
-                    whatsapp_data.exclude(id=instance_to_update.id).delete()
+                        # Update database with NEW MODE fields
+                        whatsapp_data = WhatsappTenantData.objects.filter(tenant_id=tenant_id)
+                        en_records = whatsapp_data.filter(language='en')
+                        instance_to_update = en_records.order_by('id').first()
 
-                    reset_fastapi_cache(business_phone_number_id=business_phone_number_id)
+                        instance_to_update.nodes = nodes
+                        instance_to_update.edges = edges
+                        instance_to_update.start_node_id = start_node_id
+                        instance_to_update.flow_version = 2
+                        instance_to_update.fallback_count = fallback_count
+                        instance_to_update.fallback_message = fallback_message
+                        instance_to_update.flow_name = flow_name_sanitized
+                        instance_to_update.hop_nodes = hop_nodes
+                        instance_to_update.updated_at = timezone.now()
+                        instance_to_update.introductory_msg = None
+                        instance_to_update.multilingual = False
 
-                    print("Query executed successfully")
-                    return JsonResponse({'status': 'success', 'message': 'data succesfully updated','flow_name':flow_name})
+                        # Clear legacy fields
+                        instance_to_update.flow_data = None
+                        instance_to_update.adj_list = None
+                        instance_to_update.start = None
+
+                        instance_to_update.save()
+
+                        whatsapp_data.exclude(id=instance_to_update.id).delete()
+                        reset_fastapi_cache(business_phone_number_id=business_phone_number_id)
+
+                        print(f"Flow v2 saved successfully: {flow_name_sanitized}")
+                        return JsonResponse({
+                            'status': 'success',
+                            'message': 'Data successfully updated',
+                            'flow_name': flow_name_sanitized,
+                            'flow_version': 2
+                        })
+
+                    else:
+                        print("Using LEGACY flow system (v1)")
+                        flow_data, adj_list, start, dynamicModelFields = convert_flow(node_data, tenant)
+
+                        dynamicModelFields.append({ 'field_name': 'phone_no', 'field_type': 'bigint'})
+
+                        flow_name = DynamicModelListView.sanitize_model_name(model_name=flow_name)
+                        print("new flow name: ", flow_name)
+                        model_name= flow_name
+                        fields = dynamicModelFields
+                        print("model name: ", model_name, fields)
+                        createDynamicModel(model_name, fields, tenant_id)
+
+                        # Updating whatsapp_tenant_flow with flow_data and adj_list
+                        whatsapp_data = WhatsappTenantData.objects.filter(tenant_id = tenant_id)
+                        en_records = whatsapp_data.filter(language = 'en')
+
+                        instance_to_update = en_records.order_by('id').first()
+
+                        instance_to_update.flow_data = flow_data
+                        instance_to_update.hop_nodes = hop_nodes
+                        instance_to_update.adj_list = adj_list
+                        instance_to_update.start = start
+                        instance_to_update.flow_version = 1  # Mark as legacy
+                        instance_to_update.fallback_count = fallback_count
+                        instance_to_update.fallback_message = fallback_message
+                        instance_to_update.flow_name = flow_name
+                        instance_to_update.updated_at = timezone.now()
+                        instance_to_update.introductory_msg = None
+                        instance_to_update.multilingual = False
+                        instance_to_update.save()
+
+                        whatsapp_data.exclude(id=instance_to_update.id).delete()
+                        reset_fastapi_cache(business_phone_number_id=business_phone_number_id)
+
+                        print("Query executed successfully")
+                        return JsonResponse({'status': 'success', 'message': 'data succesfully updated','flow_name':flow_name, 'flow_version': 1})
 
                 except Exception as e:
                     print(f"An error occurred during update: {e}")
+                    import traceback
+                    traceback.print_exc()
                     return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
             else:
                 return JsonResponse({'message': 'No Node Data Present'}, status=400)
@@ -547,10 +669,24 @@ def get_whatsapp_tenant_data(request):
                 # Rename 'tenant' key to 'tenant_id' if it exists
                 if 'tenant' in wd_dict:
                     wd_dict['tenant_id'] = wd_dict.pop('tenant')
-                    
+
                 # Ensure flow_data is included in each whatsapp_data object (like FastAPI)
                 if 'flow_data' not in wd_dict and hasattr(wd, 'flow_data'):
                     wd_dict['flow_data'] = wd.flow_data
+
+                # Ensure flow_version is included (defaults to 1 for legacy)
+                if 'flow_version' not in wd_dict:
+                    wd_dict['flow_version'] = getattr(wd, 'flow_version', 1)
+
+                # Include v2 fields if present
+                if hasattr(wd, 'flow_version') and wd.flow_version == 2:
+                    if 'nodes' not in wd_dict and hasattr(wd, 'nodes'):
+                        wd_dict['nodes'] = wd.nodes
+                    if 'edges' not in wd_dict and hasattr(wd, 'edges'):
+                        wd_dict['edges'] = wd.edges
+                    if 'start_node_id' not in wd_dict and hasattr(wd, 'start_node_id'):
+                        wd_dict['start_node_id'] = wd.start_node_id
+
                 whatsapp_data_json.append(wd_dict)
             
         elif bpid:
@@ -569,6 +705,20 @@ def get_whatsapp_tenant_data(request):
                 # Ensure flow_data is included in each whatsapp_data object (like FastAPI)
                 if 'flow_data' not in wd_dict and hasattr(wd, 'flow_data'):
                     wd_dict['flow_data'] = wd.flow_data
+
+                # Ensure flow_version is included (defaults to 1 for legacy)
+                if 'flow_version' not in wd_dict:
+                    wd_dict['flow_version'] = getattr(wd, 'flow_version', 1)
+
+                # Include v2 fields if present
+                if hasattr(wd, 'flow_version') and wd.flow_version == 2:
+                    if 'nodes' not in wd_dict and hasattr(wd, 'nodes'):
+                        wd_dict['nodes'] = wd.nodes
+                    if 'edges' not in wd_dict and hasattr(wd, 'edges'):
+                        wd_dict['edges'] = wd.edges
+                    if 'start_node_id' not in wd_dict and hasattr(wd, 'start_node_id'):
+                        wd_dict['start_node_id'] = wd.start_node_id
+
                 whatsapp_data_json.append(wd_dict)
             tenant_id = whatsapp_data.first().tenant_id
             
