@@ -123,6 +123,7 @@ urlpatterns = [
     path('prompt-to-flow/', tables.test),
     path('translate-flow/', wa_chat_views.translate_whatsapp_flow),
     path('test-api/', wa_chat_views.test_api),
+    path('reset-automation/', wa_chat_views.reset_automation, name='reset-automation'),
     path('product-bulk-upload/', shop_views.ProductUploadView.as_view()),
     path('assign-role/', getuser.assign_role, name='tenant_users'),
     path('retailers/create/', orderviews.RetailerCreateAPIView.as_view(), name='retailer-create'),

@@ -1305,3 +1305,86 @@ def test_api(request):
     elif request.method == 'GET':
         print("GET req rcvd: ", name)
         return JsonResponse({'data': f"Your name is {name}"})
+
+
+@csrf_exempt
+def reset_automation(request):
+    """
+    Reset automation flow data while preserving WhatsApp settings.
+
+    Clears:
+    - flow_data, nodes, edges, adj_list, start, start_node_id
+    - flow_version, flow_name, hop_nodes
+
+    Preserves:
+    - business_phone_number_id, access_token, business_account_id
+    - fallback_count, fallback_message, language, multilingual, introductory_msg
+    """
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+
+    try:
+        # Get tenant ID from headers
+        tenant_id = request.headers.get('X-Tenant-Id')
+        if not tenant_id:
+            return JsonResponse({'status': 'error', 'message': 'No tenant ID found in headers'}, status=400)
+
+        # Verify tenant exists
+        try:
+            tenant = Tenant.objects.get(id=tenant_id)
+        except Tenant.DoesNotExist:
+            return JsonResponse({'status': 'error', 'message': 'Invalid tenant ID'}, status=404)
+
+        # Get WhatsApp tenant data
+        whatsapp_data = WhatsappTenantData.objects.filter(tenant_id=tenant_id).first()
+
+        if not whatsapp_data:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No automation found for this tenant'
+            }, status=404)
+
+        # Store business_phone_number_id for cache reset
+        business_phone_number_id = whatsapp_data.business_phone_number_id
+
+        # Clear flow fields only (preserve WhatsApp settings)
+        whatsapp_data.flow_data = None
+        whatsapp_data.nodes = None
+        whatsapp_data.edges = None
+        whatsapp_data.adj_list = None
+        whatsapp_data.start = None
+        whatsapp_data.start_node_id = None
+        whatsapp_data.flow_version = 1  # Reset to default
+        whatsapp_data.flow_name = None
+        whatsapp_data.hop_nodes = None
+        whatsapp_data.updated_at = timezone.now()
+
+        # Save changes
+        whatsapp_data.save()
+
+        # Reset FastAPI cache
+        reset_fastapi_cache(business_phone_number_id=business_phone_number_id)
+
+        print(f"Automation reset successfully for tenant: {tenant_id}")
+
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Automation reset successfully. Flow data cleared and cache refreshed.',
+            'cleared_fields': [
+                'flow_data', 'nodes', 'edges', 'adj_list', 'start',
+                'start_node_id', 'flow_version', 'flow_name', 'hop_nodes'
+            ],
+            'preserved_fields': [
+                'business_phone_number_id', 'access_token', 'business_account_id',
+                'fallback_count', 'fallback_message', 'language', 'multilingual', 'introductory_msg'
+            ]
+        }, status=200)
+
+    except Exception as e:
+        print(f"Error resetting automation: {e}")
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to reset automation: {str(e)}'
+        }, status=500)
