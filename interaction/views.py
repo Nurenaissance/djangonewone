@@ -75,6 +75,14 @@ def create_conversation_objects(payload: Dict) -> List[Conversation]:
         Conversation(
             contact_id=payload['contact_id'],
             message_text=message.get('text', ''),
+
+            # Media support fields
+            message_type=message.get('message_type', 'text'),
+            media_url=message.get('media_url'),
+            media_caption=message.get('media_caption'),
+            media_filename=message.get('media_filename'),
+            thumbnail_url=message.get('thumbnail_url'),
+
             sender=message.get('sender', ''),
             tenant_id=payload['tenant'],
             source=payload['source'],

@@ -11,12 +11,20 @@ class Conversation(models.Model):
     contact_id = models.CharField(max_length=255)
     message_text = models.TextField(null=True, blank=True)
     encrypted_message_text = models.BinaryField(null=True, blank=True)
+
+    # Media support fields
+    message_type = models.CharField(max_length=20, null=True, blank=True, help_text="text, image, video, audio, document")
+    media_url = models.URLField(max_length=500, null=True, blank=True, help_text="Azure Blob Storage URL")
+    media_caption = models.TextField(null=True, blank=True, help_text="Caption for image/video")
+    media_filename = models.CharField(max_length=255, null=True, blank=True, help_text="Original filename")
+    thumbnail_url = models.URLField(max_length=500, null=True, blank=True, help_text="Thumbnail URL for videos")
+
     sender = models.CharField(max_length=50)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=True, blank=True)
     source=models.CharField(max_length=255)
     date_time = models.DateTimeField(null=True, blank=True)
     business_phone_number_id = models.CharField(max_length = 255, null=True, blank=True)
-    mapped = models.BooleanField(default=False) 
+    mapped = models.BooleanField(default=False)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, blank=True, null=True,related_name='interaction_conversations')
 
     # Add any other file
