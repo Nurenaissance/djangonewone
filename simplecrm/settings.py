@@ -196,11 +196,13 @@ DATABASES = {
         'NAME': 'nurenpostgres_Whatsapp',
         'USER': 'nurenai',
         'PASSWORD': 'Biz1nurenWar*',
-        'HOST': 'nurenaistore.postgres.database.azure.com', 
+        'HOST': 'nurenaistore.postgres.database.azure.com',
         'PORT': '5432',
         'OPTIONS': {
             'sslmode': 'require',  # Enforce SSL
         },
+        'CONN_MAX_AGE': 600,  # Keep connections alive for 10 minutes (reduces connection churn)
+        'CONN_HEALTH_CHECKS': True,  # Validate connections before reuse (Django 4.1+)
     }
 }
 
