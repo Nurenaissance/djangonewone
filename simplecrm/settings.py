@@ -28,7 +28,7 @@ DEBUG = False
 
 ALLOWED_HOSTS = ['*','http://127.0.0.1:9000/']
 
-JWT_SECRET = "CHANGE_THIS_TO_A_LONG_RANDOM_STRING"
+JWT_SECRET = os.environ.get("JWT_SECRET", "whatsapp-business-automation-jwt-secret-2026-change-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_LIFETIME = 60 * 60  # 1 hour
 JWT_REFRESH_TOKEN_LIFETIME = 60 * 60 * 24 * 30  # 30 days
