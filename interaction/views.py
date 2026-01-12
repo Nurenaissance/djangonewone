@@ -103,6 +103,7 @@ def bulk_create_with_batching(objects: List, batch_size: int = 500):
 
 @csrf_exempt
 def save_conversations(request, contact_id):
+    payload = None
     try:
         payload = extract_payload(request)
         payload['time'] = timezone.now()
@@ -113,22 +114,91 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode()
 
-        # Use Celery task properly with .delay()
-        # This sends the task to the Celery worker queue
-        process_conversations.delay(safe_payload, safe_key)
-        logger.info(f"✅ Conversation queued for {payload.get('contact_id')}")
-
-        return JsonResponse(
-            {"message": "Conversation accepted"},
-            status=202
-        )
+        # Try Celery first (async, faster response)
+        try:
+            process_conversations.delay(safe_payload, safe_key)
+            logger.info(f"✅ Conversation queued for {payload.get('contact_id')}")
+            return JsonResponse(
+                {"message": "Conversation accepted", "method": "async"},
+                status=202
+            )
+        except Exception as celery_error:
+            # Celery/Redis is down - fallback to synchronous save
+            logger.warning(f"⚠️ Celery unavailable, falling back to sync save: {celery_error}")
+            return save_conversations_sync(payload, key)
 
     except Tenant.DoesNotExist:
-        logger.error(f"Tenant not found: {payload.get('tenant')}")
+        logger.error(f"Tenant not found: {payload.get('tenant') if payload else 'unknown'}")
         return JsonResponse({"error": "Tenant not found"}, status=404)
     except Exception as e:
-        logger.error(f"Error saving conversation: {e}")
+        logger.error(f"Error saving conversation: {e}", exc_info=True)
         return handle_error(e)
+
+
+def save_conversations_sync(payload, key):
+    """
+    Synchronous fallback when Celery is unavailable.
+    Saves directly to database without async queue.
+    """
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    import os as sync_os
+
+    try:
+        contact_id = payload['contact_id']
+        conversations = payload.get('conversations', [])
+        tenant_id = payload['tenant']
+        source = payload.get('source', '')
+        bpid = payload.get('business_phone_number_id', '')
+        timestamp = payload.get('time', timezone.now())
+
+        if not conversations:
+            logger.warning(f"⚠️ Empty conversations for {contact_id}")
+            return JsonResponse({"message": "No conversations to save"}, status=200)
+
+        # Encrypt and save each message
+        saved_count = 0
+        with transaction.atomic():
+            for message in conversations:
+                try:
+                    # Encrypt message text
+                    text = message.get('text', '')
+                    data_str = json.dumps(text)
+                    iv = sync_os.urandom(16)
+                    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+                    encryptor = cipher.encryptor()
+                    pad_len = 16 - len(data_str) % 16
+                    data_str += chr(pad_len) * pad_len
+                    encrypted_data = iv + encryptor.update(data_str.encode()) + encryptor.finalize()
+
+                    Conversation.objects.create(
+                        contact_id=contact_id,
+                        encrypted_message_text=encrypted_data,
+                        sender=message.get('sender', 'unknown'),
+                        tenant_id=tenant_id,
+                        source=source,
+                        business_phone_number_id=bpid,
+                        date_time=timestamp,
+                        message_type=message.get('message_type', 'text'),
+                        media_url=message.get('media_url'),
+                        media_caption=message.get('media_caption'),
+                        media_filename=message.get('media_filename'),
+                        thumbnail_url=message.get('thumbnail_url')
+                    )
+                    saved_count += 1
+                except Exception as msg_error:
+                    logger.error(f"❌ Error saving message in sync mode: {msg_error}")
+                    continue
+
+        logger.info(f"✅ Sync saved {saved_count} conversations for {contact_id}")
+        return JsonResponse(
+            {"message": "Conversation saved (sync)", "method": "sync", "saved": saved_count},
+            status=201
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Sync save failed: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
 # def check_rate_limit(request, max_requests: int = 100, window: int = 60) -> bool:
 #     """Implement sliding window rate limiting"""
 #     client_ip = get_client_ip(request)

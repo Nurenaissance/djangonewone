@@ -190,6 +190,11 @@ WSGI_APPLICATION = 'simplecrm.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/2.0/ref/settings/#databases
 
+# Set to True if you enabled PgBouncer on Azure PostgreSQL Flexible Server
+USE_PGBOUNCER = os.environ.get('USE_PGBOUNCER', 'false').lower() == 'true'
+
+# General Purpose D2s_v3 (2 vCores, 8GB RAM) = ~150 max connections
+# Allocate connections: Django ~50, FastAPI ~30, Celery ~30, Reserve ~40
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -197,11 +202,14 @@ DATABASES = {
         'USER': 'nurenai',
         'PASSWORD': 'Biz1nurenWar*',
         'HOST': 'nurenaistore.postgres.database.azure.com',
-        'PORT': '5432',
+        'PORT': '6432' if USE_PGBOUNCER else '5432',  # PgBouncer uses port 6432
         'OPTIONS': {
             'sslmode': 'require',  # Enforce SSL
+            'connect_timeout': 10,  # Connection timeout in seconds
         },
-        'CONN_MAX_AGE': 600,  # Keep connections alive for 10 minutes (reduces connection churn)
+        # General Purpose tier has enough connections for persistent connections
+        # Keep connections alive for 5 minutes (reduces connection overhead)
+        'CONN_MAX_AGE': 300,
         'CONN_HEALTH_CHECKS': True,  # Validate connections before reuse (Django 4.1+)
     }
 }
