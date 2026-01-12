@@ -100,14 +100,6 @@ def bulk_create_with_batching(objects: List, batch_size: int = 500):
 
 # Encrypt the data using AES symmetric encryption
 # IMP: Saves conversation, takes in data from whatsappbotserver, saves data in db using redis
-import threading
-
-def async_process(payload, key):
-    try:
-        process_conversations(payload, key)
-    except Exception as e:
-        print("Async error:", e)
-
 
 @csrf_exempt
 def save_conversations(request, contact_id):
@@ -121,19 +113,21 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode()
 
-        # 🚀 Fire & forget
-        threading.Thread(
-            target=async_process,
-            args=(safe_payload, safe_key),
-            daemon=True
-        ).start()
+        # Use Celery task properly with .delay()
+        # This sends the task to the Celery worker queue
+        process_conversations.delay(safe_payload, safe_key)
+        logger.info(f"✅ Conversation queued for {payload.get('contact_id')}")
 
         return JsonResponse(
             {"message": "Conversation accepted"},
             status=202
         )
 
+    except Tenant.DoesNotExist:
+        logger.error(f"Tenant not found: {payload.get('tenant')}")
+        return JsonResponse({"error": "Tenant not found"}, status=404)
     except Exception as e:
+        logger.error(f"Error saving conversation: {e}")
         return handle_error(e)
 # def check_rate_limit(request, max_requests: int = 100, window: int = 60) -> bool:
 #     """Implement sliding window rate limiting"""

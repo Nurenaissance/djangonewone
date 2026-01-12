@@ -453,7 +453,7 @@ def reset_fastapi_cache(business_phone_number_id=None):
         if business_phone_number_id:
             headers['bpid'] = str(business_phone_number_id)
 
-        response = requests.post("https://fastapione-gue2c5ecc9c4b8hy.centralindia-01.azurewebsites.net/reset-cache", headers=headers)
+        response = requests.post("https://fastapiyes-avaaadfjgzafe6ff.canadacentral-01.azurewebsites.net/reset-cache", headers=headers)
         
         try:
             print("Reset FastAPI cache:", response.status_code, response.json())
