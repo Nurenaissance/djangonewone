@@ -376,19 +376,18 @@ def delete_contact_by_phone(request, phone_number):
 @csrf_exempt
 def get_contacts_sql(req):
     if req.method == "GET":
-
         query = "SELECT * FROM public.contacts_contact"
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        cursor.execute(query)
-        results = cursor.fetchall()
-
-        columns = [col[0] for col in cursor.description]  # Get column names
-        results = [dict(zip(columns, row)) for row in results]
-
-        print(results)
-
-        return JsonResponse(results , safe=False)
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
+                columns = [col[0] for col in cursor.description]
+            results = [dict(zip(columns, row)) for row in results]
+            print(results)
+            return JsonResponse(results, safe=False)
+        finally:
+            conn.close()  # FIX: Always close the connection
 
 
 import logging

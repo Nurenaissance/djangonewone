@@ -1171,11 +1171,12 @@ def get_template_name(message_id):
     FROM whatsapp_message_id
     WHERE message_id = %s;
     """
-    
-    cursor = connection.cursor()
-    cursor.execute(sql_query, (message_id,))
-    
-    result = cursor.fetchone()
+
+    # FIX: Use context manager to ensure cursor is always closed
+    with connection.cursor() as cursor:
+        cursor.execute(sql_query, (message_id,))
+        result = cursor.fetchone()
+
     print("Result: ", result)
     if result:
         template_name, broadcast_group_name = result
