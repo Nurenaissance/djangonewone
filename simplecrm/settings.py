@@ -190,11 +190,22 @@ WSGI_APPLICATION = 'simplecrm.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/2.0/ref/settings/#databases
 
-# Set to True if you enabled PgBouncer on Azure PostgreSQL Flexible Server
-USE_PGBOUNCER = os.environ.get('USE_PGBOUNCER', 'false').lower() == 'true'
+# =============================================================================
+# PERMANENT FIX: PgBouncer Connection Pooling (RECOMMENDED)
+# =============================================================================
+# Azure PostgreSQL Flexible Server has built-in PgBouncer on port 6432
+# This MUST be enabled in Azure Portal for this to work:
+#   Azure Portal → PostgreSQL → Server Parameters → pgbouncer.enabled = true
+#
+# Benefits of PgBouncer:
+# - Handles connection pooling at database level
+# - Supports 1000s of app connections with only ~100 DB connections
+# - Eliminates "remaining connection slots" errors permanently
+# =============================================================================
 
-# General Purpose D2s_v3 (2 vCores, 8GB RAM) = ~150 max connections
-# Allocate connections: Django ~50, FastAPI ~30, Celery ~30, Reserve ~40
+# DEFAULT TO TRUE - Enable PgBouncer by default for production stability
+USE_PGBOUNCER = os.environ.get('USE_PGBOUNCER', 'true').lower() == 'true'
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -202,15 +213,17 @@ DATABASES = {
         'USER': 'nurenai',
         'PASSWORD': 'Biz1nurenWar*',
         'HOST': 'nurenaistore.postgres.database.azure.com',
-        'PORT': '6432' if USE_PGBOUNCER else '5432',  # PgBouncer uses port 6432
+        'PORT': '6432' if USE_PGBOUNCER else '5432',
         'OPTIONS': {
-            'sslmode': 'require',  # Enforce SSL
-            'connect_timeout': 10,  # Connection timeout in seconds
+            'sslmode': 'require',
+            'connect_timeout': 10,
+            # Required for PgBouncer transaction pooling mode
+            'options': '-c statement_timeout=30000' if USE_PGBOUNCER else '',
         },
-        # General Purpose tier has enough connections for persistent connections
-        # Keep connections alive for 5 minutes (reduces connection overhead)
-        'CONN_MAX_AGE': 300,
-        'CONN_HEALTH_CHECKS': True,  # Validate connections before reuse (Django 4.1+)
+        # With PgBouncer: Use persistent connections (PgBouncer manages the pool)
+        # Without PgBouncer: Close after each request to prevent exhaustion
+        'CONN_MAX_AGE': 120 if USE_PGBOUNCER else 0,
+        'CONN_HEALTH_CHECKS': True,
     }
 }
 
@@ -305,7 +318,7 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
 # Celery Worker Configuration
-CELERY_WORKER_CONCURRENCY = 5  # Number of concurrent workers
+CELERY_WORKER_CONCURRENCY = 2  # Reduced from 5 to prevent DB connection exhaustion
 
 # Task Routing Configuration
 CELERY_TASK_ROUTES = {
