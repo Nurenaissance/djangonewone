@@ -76,6 +76,8 @@ INSTALLED_APPS = [
 
 
 MIDDLEWARE = [
+    # CRITICAL: Connection cleanup MUST be first to ensure connections close after EVERY request
+    'simplecrm.middleware.ConnectionCleanupMiddleware',
     'simplecrm.jwt_auth_middleware.JWTAuthMiddleware',
     'simplecrm.tenant_bridge.TenantBridgeMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -213,16 +215,17 @@ DATABASES = {
         'USER': 'nurenai',
         'PASSWORD': 'Biz1nurenWar*',
         'HOST': 'nurenaistore.postgres.database.azure.com',
-        'PORT': '6432' if USE_PGBOUNCER else '5432',
+        # CRITICAL: Use port 5432 (direct) until PgBouncer is enabled in Azure Portal
+        # Once PgBouncer is enabled: Azure Portal → PostgreSQL → Server Parameters → pgbouncer.enabled = true
+        # Then change this back to 6432
+        'PORT': '5432',  # Changed to direct connection - PgBouncer not enabled in Azure
         'OPTIONS': {
             'sslmode': 'require',
             'connect_timeout': 10,
-            # Required for PgBouncer transaction pooling mode
-            'options': '-c statement_timeout=30000' if USE_PGBOUNCER else '',
         },
-        # With PgBouncer: Use persistent connections (PgBouncer manages the pool)
-        # Without PgBouncer: Close after each request to prevent exhaustion
-        'CONN_MAX_AGE': 120 if USE_PGBOUNCER else 0,
+        # CRITICAL: Close connection after EVERY request to prevent exhaustion
+        # This is slower but prevents "remaining connection slots" error
+        'CONN_MAX_AGE': 0,  # Close immediately after each request
         'CONN_HEALTH_CHECKS': True,
     }
 }
@@ -318,7 +321,9 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
 # Celery Worker Configuration
-CELERY_WORKER_CONCURRENCY = 2  # Reduced from 5 to prevent DB connection exhaustion
+# CRITICAL: Keep this LOW to prevent database connection exhaustion
+# Each worker can hold a database connection, so fewer workers = fewer connections
+CELERY_WORKER_CONCURRENCY = 1  # Reduced to 1 to minimize DB connections
 
 # Task Routing Configuration
 CELERY_TASK_ROUTES = {

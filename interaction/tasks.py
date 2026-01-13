@@ -1,5 +1,6 @@
 from celery import shared_task
-from django.db import transaction
+from django.db import transaction, connection
+from django import db
 from .models import Conversation
 import logging
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -13,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 @shared_task(bind=True, max_retries=5, queue='process_conv_queue')
 def process_conversations(self, payload, key):
+    # CRITICAL: Close any stale connections at start
+    db.close_old_connections()
+
     try:
         logger.info(f"📝 Processing conversation for contact: {payload.get('contact_id')}")
 
@@ -96,6 +100,13 @@ def process_conversations(self, payload, key):
         # Exponential backoff: 2, 4, 8, 16, 32 seconds
         countdown = 2 ** (self.request.retries + 1)
         raise self.retry(exc=exc, countdown=countdown)
+
+    finally:
+        # CRITICAL: Always close database connections after task
+        try:
+            db.connections.close_all()
+        except Exception as e:
+            logger.warning(f"Error closing database connections: {e}")
 
 def encrypt_data(data, key):
     data_str = json.dumps(data)

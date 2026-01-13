@@ -1,9 +1,37 @@
 from django.utils.deprecation import MiddlewareMixin
 from django.http import HttpResponse
-from .models import Tenant
+from django import db
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CRITICAL: Connection Cleanup Middleware
+# =============================================================================
+# This middleware ensures database connections are properly cleaned up after
+# EVERY request to prevent "remaining connection slots" errors on Azure PostgreSQL
+# =============================================================================
+
+class ConnectionCleanupMiddleware:
+    """
+    Middleware that ensures database connections are closed after every request.
+    This is critical for preventing connection exhaustion on Azure PostgreSQL.
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # Close old/stale connections before processing
+        db.close_old_connections()
+
+        response = self.get_response(request)
+
+        # Close old connections after the request (respects CONN_MAX_AGE)
+        # With CONN_MAX_AGE=0, this closes all connections
+        db.close_old_connections()
+
+        return response
 
 class TenantMiddleware(MiddlewareMixin):
     def process_request(self, request):

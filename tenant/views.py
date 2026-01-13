@@ -73,17 +73,12 @@ def tenant_list(request):
         organization = data.get('organization')
         db_user_password = data.get('password')
         key = generate_symmetric_key()
-        cursor = connection.cursor()
         try:
             print("begin", tenant_id, organization)
-            
-            tenant = Tenant.objects.create(id=tenant_id, organization=organization, db_user=f"crm_tenant_{tenant_id}", db_user_password=db_user_password, key = key)
+            tenant = Tenant.objects.create(id=tenant_id, organization=organization, db_user=f"crm_tenant_{tenant_id}", db_user_password=db_user_password, key=key)
             print(tenant)
             return JsonResponse({'msg': 'Tenant registered successfully'})
         except IntegrityError as e:
-            # Rollback the transaction if any error occurs
-            if cursor:
-                cursor.execute("ROLLBACK")
             print("error: ", str(e))
             return JsonResponse({'message': f'Error creating tenant: {str(e)}'}, status=500)
         except Exception as e:

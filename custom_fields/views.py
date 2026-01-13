@@ -159,9 +159,6 @@ def export_data_for_custom_field(request):
 
         df = create_subfile(uploaded_file, columns_text, merge_columns)
         print("DATAFRAM CREATED: " ,df.columns)
-        
-        # Open database connection
-        cursor = connection.cursor()
 
         for column in df.columns:
             try:

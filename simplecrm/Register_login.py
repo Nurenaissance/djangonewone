@@ -201,78 +201,84 @@ from django.conf import settings
 
 class LoginView(APIView):
     def post(self, request):
-        data = request.data
-        username = data.get('username')
-        password = data.get('password')
+        try:
+            data = request.data
+            username = data.get('username')
+            password = data.get('password')
 
-        if not (username and password):
-            return Response({'msg': 'Missing required fields'}, status=status.HTTP_400_BAD_REQUEST)
+            if not (username and password):
+                return Response({'msg': 'Missing required fields'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user = authenticate(username=username, password=password)
-        print("user logged in is", user)
-        if user:
-            tenant_id = user.tenant.id  # Get tenant ID
-            user_id = user.id
-            role = user.role
+            user = authenticate(username=username, password=password)
+            print("user logged in is", user)
 
-            # Fetch tenant tier
-            try:
-                tenant_obj = Tenant.objects.get(id=tenant_id)
-                tier = tenant_obj.tier if hasattr(tenant_obj, 'tier') else 'free'
-            except Tenant.DoesNotExist:
-                tier = 'free'
+            if user:
+                tenant_id = user.tenant.id  # Get tenant ID
+                user_id = user.id
+                role = user.role
 
-            now = datetime.datetime.utcnow()
+                # Fetch tenant tier
+                try:
+                    tenant_obj = Tenant.objects.get(id=tenant_id)
+                    tier = tenant_obj.tier if hasattr(tenant_obj, 'tier') else 'free'
+                except Tenant.DoesNotExist:
+                    tier = 'free'
 
-            # Generate JWT access token
-            access_payload = {
-                "sub": str(user_id),
-                "tenant_id": str(tenant_id),
-                "tier": tier,
-                "role": role,
-                "scope": "user",
-                "iat": now,
-                "exp": now + datetime.timedelta(seconds=settings.JWT_ACCESS_TOKEN_LIFETIME),
-            }
+                now = datetime.datetime.utcnow()
 
-            # Generate JWT refresh token
-            refresh_payload = {
-                "sub": str(user_id),
-                "tenant_id": str(tenant_id),
-                "tier": tier,
-                "role": role,
-                "type": "refresh",
-                "iat": now,
-                "exp": now + datetime.timedelta(seconds=settings.JWT_REFRESH_TOKEN_LIFETIME),
-            }
+                # Generate JWT access token
+                access_payload = {
+                    "sub": str(user_id),
+                    "tenant_id": str(tenant_id),
+                    "tier": tier,
+                    "role": role,
+                    "scope": "user",
+                    "iat": now,
+                    "exp": now + datetime.timedelta(seconds=settings.JWT_ACCESS_TOKEN_LIFETIME),
+                }
 
-            access_token = jwt.encode(
-                access_payload,
-                settings.JWT_SECRET,
-                algorithm=settings.JWT_ALGORITHM,
-            )
-            refresh_token = jwt.encode(
-                refresh_payload,
-                settings.JWT_SECRET,
-                algorithm=settings.JWT_ALGORITHM,
-            )
+                # Generate JWT refresh token
+                refresh_payload = {
+                    "sub": str(user_id),
+                    "tenant_id": str(tenant_id),
+                    "tier": tier,
+                    "role": role,
+                    "type": "refresh",
+                    "iat": now,
+                    "exp": now + datetime.timedelta(seconds=settings.JWT_REFRESH_TOKEN_LIFETIME),
+                }
 
-            response_data = {
-                'access_token': access_token,
-                'refresh_token': refresh_token,
-                'token_type': 'Bearer',
-                'expires_in': settings.JWT_ACCESS_TOKEN_LIFETIME,
-                'tenant_id': tenant_id,
-                'user_id': user_id,
-                'role': role,
-                'tier': tier,
-                'msg': 'Login successful'
-            }
-            print("user data", response_data)
-            return Response(response_data, status=status.HTTP_200_OK)
-        else:
-            logger.error(f"Authentication failed for username: {username}")
-            return Response({'msg': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+                access_token = jwt.encode(
+                    access_payload,
+                    settings.JWT_SECRET,
+                    algorithm=settings.JWT_ALGORITHM,
+                )
+                refresh_token = jwt.encode(
+                    refresh_payload,
+                    settings.JWT_SECRET,
+                    algorithm=settings.JWT_ALGORITHM,
+                )
+
+                response_data = {
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
+                    'token_type': 'Bearer',
+                    'expires_in': settings.JWT_ACCESS_TOKEN_LIFETIME,
+                    'tenant_id': tenant_id,
+                    'user_id': user_id,
+                    'role': role,
+                    'tier': tier,
+                    'msg': 'Login successful'
+                }
+                print("user data", response_data)
+                return Response(response_data, status=status.HTTP_200_OK)
+            else:
+                logger.error(f"Authentication failed for username: {username}")
+                return Response({'msg': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        except Exception as e:
+            logger.error(f"Login error for {request.data.get('username', 'unknown')}: {str(e)}")
+            return Response({'msg': f'Login failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class LogoutView(APIView):
     def post(self, request):

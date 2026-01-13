@@ -1,10 +1,14 @@
 from celery import shared_task
 from django.db import transaction
+from django import db
 from datetime import datetime
 from django.db import connection
 
 @shared_task(bind=True, max_retries=3, queue = 'message_status_queue')
 def process_message_status(self, payload):
+    # CRITICAL: Close stale connections at start
+    db.close_old_connections()
+
     try:
         print("task process message status")
         with transaction.atomic():
@@ -16,13 +20,13 @@ def process_message_status(self, payload):
             with connection.cursor() as cursor:
                 query = """
                     INSERT INTO whatsapp_message_id (
-                        message_id, business_phone_number_id, sent, 
-                        delivered, read, replied, failed, 
-                        user_phone_number, broadcast_group, 
-                        broadcast_group_name, template_name, 
+                        message_id, business_phone_number_id, sent,
+                        delivered, read, replied, failed,
+                        user_phone_number, broadcast_group,
+                        broadcast_group_name, template_name,
                         tenant_id
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, 
+                        %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s
                     ) ON CONFLICT (message_id) DO UPDATE SET
                         sent = EXCLUDED.sent,
@@ -32,7 +36,7 @@ def process_message_status(self, payload):
                         replied = EXCLUDED.replied
                 """
                 cursor.execute(query, [
-                    messageID, 
+                    messageID,
                     data.get('business_phone_number_id'),
                     data.get('is_sent', False),
                     data.get('is_delivered', False),
@@ -46,7 +50,13 @@ def process_message_status(self, payload):
                     tenant_id
                 ])
 
-                
+
     except Exception as exc:
         # Retry with exponential backoff
         self.retry(exc=exc, countdown=2 ** self.request.retries)
+    finally:
+        # CRITICAL: Always close connections after task
+        try:
+            db.connections.close_all()
+        except Exception:
+            pass
