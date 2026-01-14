@@ -29,6 +29,30 @@ BYPASS_AUTH_ORIGINS = [
     'https://nurenaiautomatic-b7hmdnb4fzbpbtbh.canadacentral-01.azurewebsites.net'
 ]
 
+# Trusted source identifiers (for X-Trusted-Source header)
+TRUSTED_SOURCES = [
+    'nurenaiautomatic'
+]
+
+def is_trusted_request(request):
+    """Check if request is from a trusted source via Origin, Referer, or X-Trusted-Source header"""
+    # Check Origin header
+    origin = request.META.get('HTTP_ORIGIN', '')
+    if any(origin.startswith(allowed) for allowed in BYPASS_AUTH_ORIGINS):
+        return True
+
+    # Check Referer header
+    referer = request.META.get('HTTP_REFERER', '')
+    if any(referer.startswith(allowed) for allowed in BYPASS_AUTH_ORIGINS):
+        return True
+
+    # Check custom X-Trusted-Source header
+    trusted_source = request.META.get('HTTP_X_TRUSTED_SOURCE', '')
+    if trusted_source in TRUSTED_SOURCES:
+        return True
+
+    return False
+
 def is_valid_service_key(api_key):
     """
     Check if API key is a valid service key
@@ -61,10 +85,9 @@ class JWTAuthMiddleware:
             return self.get_response(request)
 
         # 2. Allow requests from trusted origins (bypass auth)
-        origin = request.META.get('HTTP_ORIGIN') or request.META.get('HTTP_REFERER', '')
-        if any(origin.startswith(allowed) for allowed in BYPASS_AUTH_ORIGINS):
+        if is_trusted_request(request):
             request.is_trusted_origin = True
-            logger.info(f"✅ Request from trusted origin: {origin}")
+            logger.info(f"✅ Request from trusted source - bypassing auth")
             return self.get_response(request)
 
         # 3. Check for Service API Key (X-Service-Key header)
@@ -140,17 +163,32 @@ class JWTAuthMiddleware:
             return self.get_response(request)
 
         except jwt.ExpiredSignatureError:
+            # Allow trusted sources even with expired token
+            if is_trusted_request(request):
+                request.is_trusted_origin = True
+                logger.info("✅ Trusted source with expired token - allowing request")
+                return self.get_response(request)
             return JsonResponse(
                 {"error": "token_expired", "message": "Access token has expired"},
                 status=401
             )
         except jwt.InvalidTokenError as e:
+            # Allow trusted sources even with invalid token
+            if is_trusted_request(request):
+                request.is_trusted_origin = True
+                logger.info("✅ Trusted source with invalid token - allowing request")
+                return self.get_response(request)
             logger.warning(f"Invalid JWT token: {str(e)}")
             return JsonResponse(
                 {"error": "invalid_token", "message": "Invalid token"},
                 status=401
             )
         except Exception as e:
+            # Allow trusted sources even on auth errors
+            if is_trusted_request(request):
+                request.is_trusted_origin = True
+                logger.info("✅ Trusted source with auth error - allowing request")
+                return self.get_response(request)
             logger.error(f"Unexpected error in JWT middleware: {str(e)}")
             return JsonResponse(
                 {"error": "authentication_error", "message": "Authentication failed"},
