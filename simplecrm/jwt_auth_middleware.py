@@ -24,6 +24,11 @@ EXCLUDED_PATHS = [
     "/admin/",  # Django admin uses its own auth
 ]
 
+# Origins that bypass authentication (trusted internal services)
+BYPASS_AUTH_ORIGINS = [
+    'https://nurenaiautomatic-b7hmdnb4fzbpbtbh.canadacentral-01.azurewebsites.net'
+]
+
 def is_valid_service_key(api_key):
     """
     Check if API key is a valid service key
@@ -55,7 +60,14 @@ class JWTAuthMiddleware:
         if any(request.path.startswith(x) for x in EXCLUDED_PATHS):
             return self.get_response(request)
 
-        # 2. Check for Service API Key (X-Service-Key header)
+        # 2. Allow requests from trusted origins (bypass auth)
+        origin = request.META.get('HTTP_ORIGIN') or request.META.get('HTTP_REFERER', '')
+        if any(origin.startswith(allowed) for allowed in BYPASS_AUTH_ORIGINS):
+            request.is_trusted_origin = True
+            logger.info(f"✅ Request from trusted origin: {origin}")
+            return self.get_response(request)
+
+        # 3. Check for Service API Key (X-Service-Key header)
         service_key = request.META.get('HTTP_X_SERVICE_KEY')
 
         if service_key:
