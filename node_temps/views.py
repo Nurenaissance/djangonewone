@@ -9,6 +9,29 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import traceback
 import json
+import requests
+import logging
+
+logger = logging.getLogger(__name__)
+
+# FastAPI cache invalidation URL
+FASTAPI_URL = "https://fastapione-gue2c5ecc9c4b8hy.centralindia-01.azurewebsites.net"
+
+def invalidate_automation_cache(tenant_id):
+    """Invalidate automation cache in FastAPI when flows are updated"""
+    try:
+        # Call FastAPI cache reset endpoint
+        response = requests.post(
+            f"{FASTAPI_URL}/reset-cache",
+            headers={"bpid": str(tenant_id)},
+            timeout=5
+        )
+        if response.status_code == 200:
+            logger.info(f"Cache invalidated for tenant {tenant_id}")
+        else:
+            logger.warning(f"Failed to invalidate cache: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error invalidating cache: {str(e)}")
 
 
 class NodeTemplateListCreateAPIView(generics.ListCreateAPIView):
@@ -28,13 +51,24 @@ class NodeTemplateListCreateAPIView(generics.ListCreateAPIView):
         tenant_id = self.request.headers.get('X-Tenant-Id')
         if not tenant_id:
             raise exceptions.ValidationError('Tenant ID is missing in headers')
-        
+
         serializer.save(tenant_id=tenant_id)
+        # Invalidate cache for this tenant
+        invalidate_automation_cache(tenant_id)
     
 
 class NodeTemplateDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     queryset = NodeTemplate.objects.all()
     serializer_class = NodeTemplateSerializer
+
+    def perform_update(self, serializer):
+        """Override to invalidate cache after updating"""
+        instance = serializer.save()
+        # Invalidate cache for this tenant
+        tenant_id = self.request.headers.get('X-Tenant-Id')
+        if tenant_id:
+            invalidate_automation_cache(tenant_id)
+        return instance
 
 from django.core.exceptions import ValidationError
 from .models import NodeTemplate
@@ -77,6 +111,8 @@ def saveFlow(flow_data):
             node_template.fallback_count = fallback_count
             node_template.category = category
             node_template.save()
+            # Invalidate cache after update
+            invalidate_automation_cache(tenant_id)
         except NodeTemplate.DoesNotExist:
             raise ValidationError(f"No NodeTemplate found with ID {node_id} for tenant {tenant_id}.")
     else:
@@ -90,7 +126,9 @@ def saveFlow(flow_data):
             tenant_id=tenant_id,
             category=category
         )
-    
+        # Invalidate cache after creation
+        invalidate_automation_cache(tenant_id)
+
     return node_template
 
 

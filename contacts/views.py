@@ -1,21 +1,29 @@
 
-from .models import Contact,Tenant
+import logging
+import json
+import threading
+
+from .models import Contact, Tenant
 from .serializers import ContactSerializer
 from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
 from datetime import datetime
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 from rest_framework import status, views
 from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView, CreateAPIView
+from rest_framework.views import APIView
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.utils.timezone import make_aware
+from django.utils import timezone
 from helpers.tables import get_db_connection
 from whatsapp_chat.models import WhatsappTenantData
 from .tasks import update_contact_last_seen
-from django.utils import timezone
+from communication.models import Conversation
+from topicmodelling.models import TopicModelling
 
-
-
-from rest_framework.views import APIView
+logger = logging.getLogger(__name__)
 
 
 class ContactcustomfieldAPIView(ListCreateAPIView):
@@ -278,6 +286,11 @@ class ContactByTenantAPIView(CreateAPIView):
         try:
             bpid = request.headers.get('bpid')
             whatsapp_tenant_data = WhatsappTenantData.objects.filter(business_phone_number_id = bpid).first()
+            if not whatsapp_tenant_data:
+                return Response(
+                    {"detail": "No tenant found for the given business phone ID."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             tenant_id = whatsapp_tenant_data.tenant_id
             contact_data = request.data
             name = contact_data.get('name')
@@ -341,10 +354,7 @@ class UpdateContactAPIView(views.APIView):
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({"message": "Contact updated successfully"}, status=status.HTTP_200_OK)
-    
-from django.shortcuts import get_object_or_404
-from communication.models import Conversation
-from topicmodelling.models import TopicModelling
+
 
 def delete_contact_by_phone(request, phone_number):
     try:
@@ -390,21 +400,6 @@ def get_contacts_sql(req):
             conn.close()  # FIX: Always close the connection
 
 
-import logging
-from .models import Contact
-
-logger = logging.getLogger(__name__)
-
-
-# views.py
-import logging, json
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.timezone import make_aware
-from django.views.decorators.http import require_http_methods
-
-logger = logging.getLogger(__name__)
-
 def convert_time(datetime_str):
     """
     Converts a date-time string from 'DD/MM/YYYY, HH:MM:SS.SSS'
@@ -425,9 +420,7 @@ def convert_time(datetime_str):
     except ValueError as e:
         print(f"Error converting datetime: {e}")
         return None
-    
 
-import threading
 
 def async_last_seen(phone, type, time, tenant):
     try:
@@ -446,6 +439,11 @@ def updateLastSeen(request, phone, type):
         whatsapp_tenant_data = WhatsappTenantData.objects.filter(
             business_phone_number_id=bpid
         ).first()
+
+        if not whatsapp_tenant_data:
+            return JsonResponse({
+                "error": "No tenant found for the given business phone ID"
+            }, status=400)
 
         tenant_id = whatsapp_tenant_data.tenant_id
 

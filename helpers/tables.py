@@ -1,7 +1,16 @@
 import psycopg2, random
 from psycopg2.extras import RealDictCursor
+from psycopg2 import sql
 from django.views.decorators.csrf import csrf_exempt
 from simplecrm.get_column_name import get_model_fields, get_column_mappings
+
+# List of allowed table names to prevent SQL injection
+ALLOWED_TABLES = {
+    "leads_lead", "accounts_account", "contacts_contact",
+    "interaction_meetings", "interaction_calls", "opportunities_opportunity",
+    "tasks_tasks", "interaction_interaction", "campaign_campaign",
+    "vendors_vendors", "product_experience"
+}
 
 table_mappings = {
     "Lead": "leads_lead",
@@ -28,34 +37,44 @@ def get_db_connection():
 
 
 def fetch_table(table_name: str):
-    try: 
+    conn = None
+    cur = None
+    try:
+        # Validate table name against allowed list to prevent SQL injection
+        if table_name not in ALLOWED_TABLES:
+            print(f"Invalid table name: {table_name}")
+            return []
+
         conn = get_db_connection()
-        cur=conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        cur.execute(f"SELECT * FROM {table_name}")
-            
-            # Fetch all rows from the executed query
+        # Use sql.Identifier for safe table name interpolation
+        query = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name))
+        cur.execute(query)
+
+        # Fetch all rows from the executed query
         data = cur.fetchall()
-            
-            # Close the cursor and connection
-        cur.close()
-        conn.close()
-
 
         def format_row(row) -> str:
-            ans="{" + "\n"
-            ans+=",".join(f' "{key}": "{value}"' for key, value in row.items())
-            ans+="\n" + "}"
+            ans = "{" + "\n"
+            ans += ",".join(f' "{key}": "{value}"' for key, value in row.items())
+            ans += "\n" + "}"
             return ans
 
         # Iterate through each row and format
         formatted_rows = [format_row(row) for row in data]
 
         return formatted_rows
-    
+
     except Exception as e:
         print(f"Error fetching data: {e}")
         return []
+    finally:
+        # Always close cursor and connection
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 def get_tables_schema():
     query = """
@@ -112,49 +131,65 @@ def upload_table(data_list: list, model_name: str, tenant_id):
     '''
     Function to upload data into tables in database. it maps the table columns with columns of preset tables and uploads it. uses chatGPT for mapping.
 
-    Inputs: 
+    Inputs:
     data_list: list = list of rows of a  table with data_list[0] specifying the columns
     model_name: str = name of the table you would like to upload the data to. could be among [Lead, Account, Contact, Meeting, Call]
 
     '''
-    print("model name: " ,model_name)
-    columns = data_list[0]
-    print("columns: " ,columns)
-    fields = get_model_fields(model_name)
-    print("model fields: " ,fields)
-    mappings = get_column_mappings(fields, columns)
-    print("mappings: " ,mappings)
-    table_name = table_mappings.get(model_name)
-    
-    for index, item in enumerate(data_list[0]):
-        if item in mappings.values():
-            key_to_replace = next(key for key, value in mappings.items() if value == item)
-            data_list[0][index] = key_to_replace
-    print("table name: " ,table_name)
-    column_names = [str(x) for x in data_list[0]]
-    print("column list: " ,column_names)
-    conn = get_db_connection()
-    cur= conn.cursor()
+    conn = None
+    cur = None
+    try:
+        print("model name: ", model_name)
+        columns = data_list[0]
+        print("columns: ", columns)
+        fields = get_model_fields(model_name)
+        print("model fields: ", fields)
+        mappings = get_column_mappings(fields, columns)
+        print("mappings: ", mappings)
+        table_name = table_mappings.get(model_name)
 
-    for row in data_list[1:]:
-        values = list(row) + [tenant_id]  # Ensure row is a list and concatenate tenant_id
-    
-        insert_data_query = f"""
-        INSERT INTO {table_name} ({', '.join(f'"{column}" ' for column in column_names)}, "tenant_id")
-        VALUES ({', '.join('%s' for   _ in range(len(column_names)))}, %s);
-        """
-        cur.execute(insert_data_query, values)
-        print("testingg")
-        conn.commit()
-    cur.execute(f"SELECT * FROM {table_name};")
-    rows = cur.fetchall()
-    print("\nData in the PostgreSQL table:")
-    for row in rows:
-        print(row)
+        # Validate table name exists in mappings
+        if not table_name or table_name not in ALLOWED_TABLES:
+            raise ValueError(f"Invalid model name: {model_name}")
 
-    # Close the cursor and connection
-    cur.close()
-    conn.close()
+        for index, item in enumerate(data_list[0]):
+            if item in mappings.values():
+                key_to_replace = next(key for key, value in mappings.items() if value == item)
+                data_list[0][index] = key_to_replace
+        print("table name: ", table_name)
+        column_names = [str(x) for x in data_list[0]]
+        print("column list: ", column_names)
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Build query using sql module for safe identifier handling
+        columns_sql = sql.SQL(', ').join([sql.Identifier(col) for col in column_names] + [sql.Identifier('tenant_id')])
+        placeholders = sql.SQL(', ').join([sql.Placeholder()] * (len(column_names) + 1))
+        insert_query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(table_name),
+            columns_sql,
+            placeholders
+        )
+
+        for row in data_list[1:]:
+            values = list(row) + [tenant_id]
+            cur.execute(insert_query, values)
+            print("testingg")
+            conn.commit()
+
+        # Use safe query for SELECT
+        select_query = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name))
+        cur.execute(select_query)
+        rows = cur.fetchall()
+        print("\nData in the PostgreSQL table:")
+        for row in rows:
+            print(row)
+    finally:
+        # Always close cursor and connection
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 def create_table(table_list: list, table_name: str):
     '''
@@ -164,39 +199,69 @@ def create_table(table_list: list, table_name: str):
     table_list: list = list of rows of a  table with data_list[0] specifying the columns
     table_name: str = a text that you would like to be the table_name
     '''
-    
-    conn = get_db_connection()
-    cur = conn.cursor()
-    column_names = [str(x) for x in table_list[0]]
-    print("columns : " ,column_names)
-    create_table_query = f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-        id SERIAL PRIMARY KEY,
-        {', '.join(f'"{column}" VARCHAR(500)' for column in column_names)},
-        "tenant_id" VARCHAR(255)
-    );
-    """
-    cur.execute(create_table_query)
-    conn.commit()
-    print("test")
-    for row in table_list[1:]:
-        insert_data_query = f"""
-        INSERT INTO {table_name} ({','.join(f'"{column}" ' for column in column_names)})
-        VALUES ({','.join(f"'{entity}'" for entity in row)});
-        """
-        cur.execute(insert_data_query)
-        conn.commit()
-    
-    print("test2")
-    cur.execute(f"SELECT * FROM {table_name};")
-    rows = cur.fetchall()
-    print("\nData in the PostgreSQL table:")
-    for row in rows:
-        print(row)
+    import re
 
-    # Close the cursor and connection
-    cur.close()
-    conn.close()
+    conn = None
+    cur = None
+    try:
+        # Validate table_name to prevent SQL injection (alphanumeric and underscore only)
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            raise ValueError(f"Invalid table name: {table_name}")
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        column_names = [str(x) for x in table_list[0]]
+
+        # Validate column names (alphanumeric and underscore only)
+        for col in column_names:
+            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', col):
+                raise ValueError(f"Invalid column name: {col}")
+
+        print("columns : ", column_names)
+
+        # Build CREATE TABLE query safely using sql module
+        column_defs = sql.SQL(', ').join([
+            sql.SQL("{} VARCHAR(500)").format(sql.Identifier(col))
+            for col in column_names
+        ])
+        create_table_query = sql.SQL("""
+            CREATE TABLE IF NOT EXISTS {} (
+            id SERIAL PRIMARY KEY,
+            {},
+            "tenant_id" VARCHAR(255)
+        )""").format(sql.Identifier(table_name), column_defs)
+
+        cur.execute(create_table_query)
+        conn.commit()
+        print("test")
+
+        # Build INSERT query with parameterized values (prevents SQL injection)
+        columns_sql = sql.SQL(', ').join([sql.Identifier(col) for col in column_names])
+        placeholders = sql.SQL(', ').join([sql.Placeholder()] * len(column_names))
+        insert_query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(table_name),
+            columns_sql,
+            placeholders
+        )
+
+        for row in table_list[1:]:
+            # Use parameterized query instead of string interpolation
+            cur.execute(insert_query, list(row))
+            conn.commit()
+
+        print("test2")
+        select_query = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name))
+        cur.execute(select_query)
+        rows = cur.fetchall()
+        print("\nData in the PostgreSQL table:")
+        for row in rows:
+            print(row)
+    finally:
+        # Always close cursor and connection
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt

@@ -16,7 +16,15 @@ import re
 from tenant.models import Tenant
 
 
-User =  get_user_model()
+User = get_user_model()
+
+
+def validate_identifier(name, identifier_type="identifier"):
+    """Validate that a name is a safe SQL identifier (alphanumeric and underscore only)."""
+    if not name or not isinstance(name, str):
+        raise ValueError(f"Invalid {identifier_type}: must be a non-empty string")
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise ValueError(f"Invalid {identifier_type}: '{name}' contains invalid characters")
 
 def get_dynamic_model_class(model_name):
     """Get the dynamic model class."""
@@ -130,10 +138,15 @@ def create_dynamic_model(model_name, fields, tenant_id, user=None):
             return {'success': False, 'message': f'Error creating model schema: {str(e)}'}
 
         try:
+            # Validate model_name to prevent SQL injection
+            validate_identifier(model_name.lower(), "model name")
+
             with transaction.atomic():
                 dynamic_model = DynamicModel.objects.create(model_name=model_name, created_by=default_user, tenant=tenant)
 
                 for field in fields:
+                    # Validate field names
+                    validate_identifier(field['field_name'], "field name")
                     DynamicField.objects.create(
                         dynamic_model=dynamic_model,
                         field_name=field['field_name'],
@@ -142,10 +155,13 @@ def create_dynamic_model(model_name, fields, tenant_id, user=None):
 
                 table_name = f"dynamic_entities_{model_name.lower()}"
                 with connection.cursor() as cursor:
-                    cursor.execute(f'ALTER TABLE "{table_name}" OWNER TO crm_tenant')
-                    cursor.execute(f'GRANT ALL PRIVILEGES ON TABLE "{table_name}" TO crm_tenant')
-                    cursor.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "{table_name}" TO public')
+                    # Use parameterized format string with validated identifier
+                    cursor.execute('ALTER TABLE %s OWNER TO crm_tenant', [table_name])
+                    cursor.execute('GRANT ALL PRIVILEGES ON TABLE %s TO crm_tenant', [table_name])
+                    cursor.execute('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s TO public', [table_name])
 
+        except ValueError as e:
+            return {'success': False, 'message': str(e)}
         except Exception as e:
             print(f"Error during dynamic model creation: {str(e)}")
             return {'success': False, 'message': f'Error during dynamic model creation: {str(e)}'}
@@ -339,18 +355,26 @@ def addDynamicModelData(request):
 
         flow_name = data['flow_name']
         variable = data['input_variable']
-        sanitized_variable = f'"{variable}"'  # Wrap the variable in quotes to handle special characters
+        tenant = request.headers.get('X-Tenant-Id')
+
+        # Validate identifiers to prevent SQL injection
+        try:
+            validate_identifier(flow_name, "flow name")
+            validate_identifier(variable, "variable name")
+            validate_identifier(tenant, "tenant ID")
+        except ValueError as e:
+            return JsonResponse({'error': str(e)}, status=400)
 
         value = data['value']
         phone = data['phone']
-        tenant = request.headers.get('X-Tenant-Id')
         table_name = f"models_{tenant}_{flow_name}"
 
+        # Build safe query with validated identifiers
         query = f"""
-            INSERT INTO {table_name} (phone_no, {sanitized_variable})
+            INSERT INTO "{table_name}" (phone_no, "{variable}")
             VALUES (%s, %s)
             ON CONFLICT (phone_no)
-            DO UPDATE SET {sanitized_variable} = EXCLUDED.{sanitized_variable};
+            DO UPDATE SET "{variable}" = EXCLUDED."{variable}";
         """
 
         with connection.cursor() as cursor:
@@ -372,33 +396,41 @@ from django.db.utils import IntegrityError
 
 def createDynamicModel(model_name, fields, tenant_id):
     try:
+        # Validate identifiers to prevent SQL injection
+        validate_identifier(model_name, "model name")
+        validate_identifier(str(tenant_id), "tenant ID")
+
         table_name = f"models_{tenant_id}_{model_name}"
+
         with connection.cursor() as cursor:
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
                     WHERE table_name = %s
                 );
             """, [table_name])
             exists = cursor.fetchone()[0]
-        
+
         if exists:
             with connection.cursor() as cursor:
-                cursor.execute(f"""
+                cursor.execute("""
                     SELECT column_name FROM information_schema.columns
                     WHERE table_name = %s;
                 """, [table_name])
                 existing_columns = {row[0] for row in cursor.fetchall()}
-            
+
             new_columns = []
-            
+
             for field in fields:
                 field_name = field.get('field_name')
                 field_type = field.get('field_type').lower()
-                
+
+                # Validate field name
+                validate_identifier(field_name, "field name")
+
                 if field_name in existing_columns:
                     continue
-                
+
                 if field_type == 'string':
                     sql_type = 'VARCHAR(255)'
                 elif field_type == 'integer':
@@ -413,14 +445,14 @@ def createDynamicModel(model_name, fields, tenant_id):
                     sql_type = 'BIGINT'
                 else:
                     raise ValueError(f"Invalid field type: {field_type}")
-                
+
                 new_columns.append(f'ADD COLUMN "{field_name}" {sql_type}')
-            
+
             if new_columns:
                 alter_table_query = f"""
                     ALTER TABLE "{table_name}" {', '.join(new_columns)};
                 """
-                
+
                 with connection.cursor() as cursor:
                     with transaction.atomic():
                         try:
@@ -430,19 +462,22 @@ def createDynamicModel(model_name, fields, tenant_id):
                         except IntegrityError as e:
                             print(f"Error updating table: {e}")
                             raise e
-            
+
             return {'success': True, 'message': f'Table "{table_name}" already exists. No new fields added.'}
 
         columns = []
         primary_key = "id BIGSERIAL PRIMARY KEY"  # Default primary key
-        
+
         for field in fields:
             field_name = field.get('field_name')
             field_type = field.get('field_type').lower()
-            
+
             if not field_name or not isinstance(field_name, str) or len(field_name) == 0:
                 raise ValueError(f"Invalid field name: {field_name}")
-            
+
+            # Validate field name
+            validate_identifier(field_name, "field name")
+
             if not field_type or field_type not in ['string', 'integer', 'text', 'boolean', 'date', 'bigint']:
                 raise ValueError(f"Invalid field type: {field_type}")
 
@@ -462,9 +497,9 @@ def createDynamicModel(model_name, fields, tenant_id):
                 sql_type = 'DATE'
             elif field_type == 'bigint':
                 sql_type = 'BIGINT'
-            
+
             columns.append(f'"{field_name}" {sql_type}')
-        
+
         create_table_query = f"""
             CREATE TABLE "{table_name}" (
                 {primary_key},
@@ -477,9 +512,10 @@ def createDynamicModel(model_name, fields, tenant_id):
                 try:
                     cursor.execute(create_table_query)
                     print(f"Table '{table_name}' created successfully.")
-                    
-                    cursor.execute(f'GRANT ALL PRIVILEGES ON TABLE "{table_name}" TO crm_tenant')
-                    cursor.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "{table_name}" TO public')
+
+                    # Use parameterized queries for GRANT statements
+                    cursor.execute('GRANT ALL PRIVILEGES ON TABLE %s TO crm_tenant', [table_name])
+                    cursor.execute('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s TO public', [table_name])
                     
                     tenant = Tenant.objects.get(id=tenant_id)
                     default_user = User.objects.first()
@@ -504,6 +540,13 @@ def getDynamicModelData(request, model_name):
     if not tenant_id:
         return JsonResponse({'success': False, 'message': 'Tenant ID is required'}, status=400)
 
+    # Validate identifiers to prevent SQL injection
+    try:
+        validate_identifier(model_name, "model name")
+        validate_identifier(str(tenant_id), "tenant ID")
+    except ValueError as e:
+        return JsonResponse({'success': False, 'message': str(e)}, status=400)
+
     table_name = f"models_{tenant_id}_{model_name}"
 
     try:
@@ -520,7 +563,7 @@ def getDynamicModelData(request, model_name):
             if not exists:
                 return JsonResponse({'success': False, 'message': f'Table "{table_name}" does not exist'}, status=404)
 
-            # Fetch all data from the table
+            # Fetch all data from the table (table_name is validated above)
             cursor.execute(f'SELECT * FROM "{table_name}";')
             columns = [col[0] for col in cursor.description]  # Get column names
             rows = cursor.fetchall()  # Fetch data

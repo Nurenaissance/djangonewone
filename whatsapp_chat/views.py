@@ -123,7 +123,8 @@ def convert_flow(flow, tenant):
     if tenant.catalog_id != None:
         catalog_id = tenant.catalog_id
     try:
-        print("Received flow: ", flow)
+        # Use repr() to safely print flow with unicode characters on Windows
+        print("Received flow with", len(flow.get('nodes', [])), "nodes and", len(flow.get('edges', [])), "edges")
         node_blocks = flow['nodes']
         edges = flow['edges']
 
@@ -445,7 +446,9 @@ def convert_flow(flow, tenant):
 
     except Exception as e:
         print(f"An error occurred in convert flow: {e}")
-        return None, None
+        import traceback
+        traceback.print_exc()
+        return None, None, None, None
     
 def reset_fastapi_cache(business_phone_number_id=None):
     try:

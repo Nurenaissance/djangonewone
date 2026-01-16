@@ -34,8 +34,21 @@ TRUSTED_SOURCES = [
     'nurenaiautomatic'
 ]
 
+# Simple API key for n8n bypass (easier to configure than service keys)
+N8N_API_KEY = 'n8n-nuren-2026'
+
 def is_trusted_request(request):
-    """Check if request is from a trusted source via Origin, Referer, or X-Trusted-Source header"""
+    """Check if request is from a trusted source via multiple methods"""
+    # Check simple X-Api-Key header (easiest for n8n)
+    api_key = request.META.get('HTTP_X_API_KEY', '')
+    if api_key == N8N_API_KEY:
+        return True
+
+    # Check query parameter ?api_key=xxx
+    api_key_param = request.GET.get('api_key', '')
+    if api_key_param == N8N_API_KEY:
+        return True
+
     # Check Origin header
     origin = request.META.get('HTTP_ORIGIN', '')
     if any(origin.startswith(allowed) for allowed in BYPASS_AUTH_ORIGINS):
