@@ -513,9 +513,9 @@ def createDynamicModel(model_name, fields, tenant_id):
                     cursor.execute(create_table_query)
                     print(f"Table '{table_name}' created successfully.")
 
-                    # Use parameterized queries for GRANT statements
-                    cursor.execute('GRANT ALL PRIVILEGES ON TABLE %s TO crm_tenant', [table_name])
-                    cursor.execute('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s TO public', [table_name])
+                    # Grant permissions (table_name is validated by validate_identifier above)
+                    cursor.execute(f'GRANT ALL PRIVILEGES ON TABLE "{table_name}" TO crm_tenant')
+                    cursor.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "{table_name}" TO public')
                     
                     tenant = Tenant.objects.get(id=tenant_id)
                     default_user = User.objects.first()
