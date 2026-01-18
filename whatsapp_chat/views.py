@@ -452,14 +452,19 @@ def convert_flow(flow, tenant):
     
 def reset_fastapi_cache(business_phone_number_id=None):
     try:
-        headers = {}
+        headers = {
+            'X-Api-Key': 'n8n-nuren-2026'  # Auth key for service-to-service calls
+        }
         if business_phone_number_id:
             headers['bpid'] = str(business_phone_number_id)
 
         response = requests.post("https://fastapione-gue2c5ecc9c4b8hy.centralindia-01.azurewebsites.net/reset-cache", headers=headers)
-        
+
         try:
-            print("Reset FastAPI cache:", response.status_code, response.json())
+            result = response.json()
+            print("Reset FastAPI cache:", response.status_code, result)
+            if response.status_code != 200:
+                print(f"Warning: FastAPI cache reset returned status {response.status_code}")
         except ValueError:
             print("Reset FastAPI cache non-JSON response:", response.status_code, response.text)
     except Exception as e:
