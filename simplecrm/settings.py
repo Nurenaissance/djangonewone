@@ -223,9 +223,10 @@ DATABASES = {
             'sslmode': 'require',
             'connect_timeout': 10,
         },
-        # CRITICAL: Close connection after EVERY request to prevent exhaustion
-        # This is slower but prevents "remaining connection slots" error
-        'CONN_MAX_AGE': 0,  # Close immediately after each request
+        # OPTIMIZED: Reuse connections for 60 seconds
+        # This dramatically improves performance by avoiding TCP connection overhead
+        # If you get "remaining connection slots" errors, enable PgBouncer in Azure Portal
+        'CONN_MAX_AGE': 60,  # Reuse connections for 60 seconds (was 0)
         'CONN_HEALTH_CHECKS': True,
     }
 }

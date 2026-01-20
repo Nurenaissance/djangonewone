@@ -138,7 +138,7 @@ def save_conversations(request, contact_id):
 def save_conversations_sync(payload, key):
     """
     Synchronous fallback when Celery is unavailable.
-    Saves directly to database without async queue.
+    OPTIMIZED: Uses bulk_create for much faster inserts.
     """
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.backends import default_backend
@@ -156,43 +156,48 @@ def save_conversations_sync(payload, key):
             logger.warning(f"⚠️ Empty conversations for {contact_id}")
             return JsonResponse({"message": "No conversations to save"}, status=200)
 
-        # Encrypt and save each message
-        saved_count = 0
-        with transaction.atomic():
-            for message in conversations:
-                try:
-                    # Encrypt message text
-                    text = message.get('text', '')
-                    data_str = json.dumps(text)
-                    iv = sync_os.urandom(16)
-                    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-                    encryptor = cipher.encryptor()
-                    pad_len = 16 - len(data_str) % 16
-                    data_str += chr(pad_len) * pad_len
-                    encrypted_data = iv + encryptor.update(data_str.encode()) + encryptor.finalize()
+        # OPTIMIZED: Prepare all objects first, then bulk insert
+        conversations_to_create = []
 
-                    Conversation.objects.create(
-                        contact_id=contact_id,
-                        encrypted_message_text=encrypted_data,
-                        sender=message.get('sender', 'unknown'),
-                        tenant_id=tenant_id,
-                        source=source,
-                        business_phone_number_id=bpid,
-                        date_time=timestamp,
-                        message_type=message.get('message_type', 'text'),
-                        media_url=message.get('media_url'),
-                        media_caption=message.get('media_caption'),
-                        media_filename=message.get('media_filename'),
-                        thumbnail_url=message.get('thumbnail_url')
-                    )
-                    saved_count += 1
-                except Exception as msg_error:
-                    logger.error(f"❌ Error saving message in sync mode: {msg_error}")
-                    continue
+        for message in conversations:
+            try:
+                # Encrypt message text
+                text = message.get('text', '')
+                data_str = json.dumps(text)
+                iv = sync_os.urandom(16)
+                cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+                encryptor = cipher.encryptor()
+                pad_len = 16 - len(data_str) % 16
+                data_str += chr(pad_len) * pad_len
+                encrypted_data = iv + encryptor.update(data_str.encode()) + encryptor.finalize()
 
-        logger.info(f"✅ Sync saved {saved_count} conversations for {contact_id}")
+                conversations_to_create.append(Conversation(
+                    contact_id=contact_id,
+                    encrypted_message_text=encrypted_data,
+                    sender=message.get('sender', 'unknown'),
+                    tenant_id=tenant_id,
+                    source=source,
+                    business_phone_number_id=bpid,
+                    date_time=timestamp,
+                    message_type=message.get('message_type', 'text'),
+                    media_url=message.get('media_url'),
+                    media_caption=message.get('media_caption'),
+                    media_filename=message.get('media_filename'),
+                    thumbnail_url=message.get('thumbnail_url')
+                ))
+            except Exception as msg_error:
+                logger.error(f"❌ Error preparing message: {msg_error}")
+                continue
+
+        # OPTIMIZED: Single bulk insert instead of N individual inserts
+        if conversations_to_create:
+            with transaction.atomic():
+                Conversation.objects.bulk_create(conversations_to_create, batch_size=500)
+
+        saved_count = len(conversations_to_create)
+        logger.info(f"✅ Sync saved {saved_count} conversations for {contact_id} (bulk)")
         return JsonResponse(
-            {"message": "Conversation saved (sync)", "method": "sync", "saved": saved_count},
+            {"message": "Conversation saved (sync-bulk)", "method": "sync-bulk", "saved": saved_count},
             status=201
         )
 
