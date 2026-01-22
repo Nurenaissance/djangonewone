@@ -93,16 +93,33 @@ class IndividualMessageStatisticsView(View):
 
     def get(self, request, *args, **kwargs):
         """
-        Fetch data based on query parameters or return all entries.
+        Fetch data based on query parameters or return entries filtered by tenant.
         """
         message_id = request.GET.get("message_id")
         tenant_id = request.headers.get("X-Tenant-Id")
+        type_filter = request.GET.get("type")  # template, campaign, group
+        type_identifier = request.GET.get("type_identifier")  # template name, campaign name, or group name
 
-        if message_id and tenant_id:
+        if message_id:
             entry = get_object_or_404(IndividualMessageStatistics, message_id=message_id)
             return JsonResponse({"data": self.serialize_entry(entry)}, status=200)
-        
-        entries = IndividualMessageStatistics.objects.all()
+
+        # Filter by tenant_id if provided (required for security)
+        if tenant_id:
+            entries = IndividualMessageStatistics.objects.filter(tenant_id=tenant_id)
+        else:
+            # Return empty if no tenant_id - don't expose all data
+            return JsonResponse({"data": [], "error": "X-Tenant-Id header required"}, status=400)
+
+        # Additional filters
+        if type_filter:
+            entries = entries.filter(type=type_filter)
+        if type_identifier:
+            entries = entries.filter(type_identifier=type_identifier)
+
+        # Order by most recent first
+        entries = entries.order_by('-timestamp')[:1000]  # Limit to 1000 most recent
+
         data = [self.serialize_entry(entry) for entry in entries]
         return JsonResponse({"data": data}, status=200, safe=False)
 
@@ -200,6 +217,7 @@ class IndividualMessageStatisticsView(View):
             "message_id": entry.message_id,
             "status": entry.status,
             "type": entry.type,
+            "type_identifier": entry.type_identifier,  # Campaign name, template name, or group name
             "userPhone": entry.userPhone,
             "tenant_id": entry.tenant_id,
             "bpid": entry.bpid,
