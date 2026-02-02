@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     'facebook_flows',
     'inventory',
     'wabits',
+    'interviews.apps.InterviewsConfig',
 ]
 
 

@@ -172,6 +172,7 @@ urlpatterns = [
     path('flow/', flow_view.FlowsView.as_view()),
     path('health/', simviews.health_check),
     path('wabits/',wabits.flow_json_view,name='flow-json'),
-    path("oauth/token/", oauth_token)
+    path("oauth/token/", oauth_token),
+    path('interviews/', include('interviews.urls')),
 ]
 urlpatterns += router.urls
