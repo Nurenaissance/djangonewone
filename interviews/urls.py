@@ -4,7 +4,8 @@ from .views import (
     InterviewResponseCreateView,
     InterviewResponseDetailView,
     save_interview_from_flow,
-    interview_stats
+    interview_stats,
+    import_from_direct_chat
 )
 
 urlpatterns = [
@@ -22,4 +23,7 @@ urlpatterns = [
 
     # Get statistics
     path('stats/', interview_stats, name='interview-stats'),
+
+    # Import from Direct Chat
+    path('import-from-chat/', import_from_direct_chat, name='import-from-direct-chat'),
 ]
