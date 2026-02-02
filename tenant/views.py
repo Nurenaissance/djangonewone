@@ -1,7 +1,7 @@
 import json, os
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .models import Tenant
+from .models import Tenant, InviteCode
 from .serializers import TenantSerializer
 from django.db import connection, transaction
 from django.contrib.auth import password_validation
@@ -213,3 +213,54 @@ def add_agents(request):
         return JsonResponse(tenantAgentsMap, safe=False)
     else:
         return JsonResponse({"message": "Only POST/GET requests allowed"}, status=405)
+
+
+@csrf_exempt
+def manage_invite_codes(request):
+    tenant_id = request.headers.get('X-Tenant-Id')
+    if not tenant_id:
+        return JsonResponse({'msg': 'Tenant ID required in headers'}, status=400)
+
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+    except Tenant.DoesNotExist:
+        return JsonResponse({'msg': 'Tenant not found'}, status=404)
+
+    if request.method == 'GET':
+        codes = InviteCode.objects.filter(tenant=tenant).order_by('-created_at')
+        data = [
+            {
+                'code': c.code,
+                'role': c.role,
+                'is_active': c.is_active,
+                'is_valid': c.is_valid(),
+                'use_count': c.use_count,
+                'max_uses': c.max_uses,
+                'created_at': c.created_at.isoformat() if c.created_at else None,
+                'expires_at': c.expires_at.isoformat() if c.expires_at else None,
+            }
+            for c in codes
+        ]
+        return JsonResponse(data, safe=False)
+
+    elif request.method == 'POST':
+        body = json.loads(request.body) if request.body else {}
+        role = body.get('role', 'employee')
+        max_uses = body.get('max_uses', 50)
+
+        code = InviteCode.objects.create(
+            code=InviteCode.generate_code(),
+            tenant=tenant,
+            role=role,
+            max_uses=max_uses,
+        )
+
+        return JsonResponse({
+            'msg': 'Invite code created',
+            'code': code.code,
+            'role': code.role,
+            'max_uses': code.max_uses,
+        })
+
+    else:
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)

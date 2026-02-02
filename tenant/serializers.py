@@ -4,4 +4,4 @@ from .models import Tenant
 class TenantSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tenant
-        fields = "__all__"
+        fields = ['id', 'organization', 'tier']

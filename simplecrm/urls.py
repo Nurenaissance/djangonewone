@@ -65,8 +65,12 @@ urlpatterns = router.urls
 urlpatterns = [
     #path('admin/', admin.site.urls),
     path('register/', Reg.register, name='register'),  # Endpoint for user registration
-    path('login/', Reg.LoginView.as_view(), name='login'), 
+    path('login/', Reg.LoginView.as_view(), name='login'),
     path('register-tenant/', Reg.register_tenant, name='register_tenant'),
+    path('register-unified/', Reg.register_unified, name='register_unified'),
+    path('validate-invite-code/', Reg.validate_invite_code, name='validate_invite_code'),
+    path('register-google/', Reg.register_google, name='register_google'),
+    path('invite-codes/', tenview.manage_invite_codes, name='manage_invite_codes'),
     path('contacts/', cviews.ContactListCreateAPIView.as_view(), name='contact-list-create'),
     path('contact/customfield', cviews.ContactcustomfieldAPIView.as_view(), name='contact-webhook'),
     path('get-contacts/', cviews.get_contacts_sql),

@@ -7,7 +7,7 @@ from rest_framework import status
 import json
 from django.contrib.auth import authenticate
 from .models import CustomUser
-from tenant.models import Tenant 
+from tenant.models import Tenant, InviteCode
 from django.contrib.auth import logout
 from django.db import connections
 from django.db import connection, IntegrityError
@@ -358,3 +358,290 @@ class LogoutView(APIView):
 #         else:
 #             logger.error(f"Authentication failed for username: {username}")
 #             return Response({'msg': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+# ──────────────────────────────────────────────
+# Unified Registration (Create Org / Join Org)
+# ──────────────────────────────────────────────
+
+@csrf_exempt
+def register_unified(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        mode = data.get('mode')  # "create" or "join"
+        username = data.get('username', '').strip()
+        email = data.get('email', '').strip()
+        password = data.get('password', '')
+        phone = data.get('phone', '').strip()
+
+        # Validate common required fields
+        if not username or not email or not password:
+            return JsonResponse({'msg': 'Username, email, and password are required'}, status=400)
+
+        if mode not in ('create', 'join'):
+            return JsonResponse({'msg': 'Mode must be "create" or "join"'}, status=400)
+
+        if CustomUser.objects.filter(username=username).exists():
+            return JsonResponse({'msg': 'Username already exists'}, status=400)
+
+        if CustomUser.objects.filter(email=email).exists():
+            return JsonResponse({'msg': 'Email already registered'}, status=400)
+
+        with transaction.atomic():
+            if mode == 'create':
+                org_name = data.get('org_name', '').strip()
+                if not org_name:
+                    return JsonResponse({'msg': 'Organization name is required'}, status=400)
+
+                tenant_id = uuid.uuid4().hex[:12]
+                db_password = secrets.token_urlsafe(16)
+                key = generate_symmetric_key()
+
+                tenant = Tenant.objects.create(
+                    id=tenant_id,
+                    organization=org_name,
+                    db_user=f"crm_tenant_{tenant_id}",
+                    db_user_password=db_password,
+                    key=key,
+                )
+
+                user = CustomUser.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    phone_number=phone or '',
+                    role=CustomUser.ADMIN,
+                    organization=org_name,
+                    tenant=tenant,
+                )
+
+                # Auto-generate a default invite code for the new org
+                invite_code = InviteCode.objects.create(
+                    code=InviteCode.generate_code(),
+                    tenant=tenant,
+                    created_by=user,
+                    role='employee',
+                )
+
+                return JsonResponse({
+                    'msg': 'Organization created successfully',
+                    'tenant_id': tenant_id,
+                    'organization': org_name,
+                    'user_id': user.id,
+                    'invite_code': invite_code.code,
+                })
+
+            else:  # mode == 'join'
+                code_str = data.get('invite_code', '').strip().upper()
+                if not code_str:
+                    return JsonResponse({'msg': 'Invite code is required'}, status=400)
+
+                try:
+                    invite = InviteCode.objects.get(code=code_str)
+                except InviteCode.DoesNotExist:
+                    return JsonResponse({'msg': 'Invalid invite code'}, status=400)
+
+                if not invite.is_valid():
+                    return JsonResponse({'msg': 'Invite code is expired or has reached its usage limit'}, status=400)
+
+                tenant = invite.tenant
+                role = invite.role or CustomUser.EMPLOYEE
+
+                user = CustomUser.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    phone_number=phone or '',
+                    role=role,
+                    organization=tenant.organization,
+                    tenant=tenant,
+                )
+
+                invite.use_count += 1
+                invite.save(update_fields=['use_count'])
+
+                return JsonResponse({
+                    'msg': 'Joined organization successfully',
+                    'tenant_id': tenant.id,
+                    'organization': tenant.organization,
+                    'user_id': user.id,
+                    'role': role,
+                })
+
+    except IntegrityError as e:
+        logger.error(f"Registration IntegrityError: {e}")
+        return JsonResponse({'msg': 'A user with that information already exists'}, status=400)
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        return JsonResponse({'msg': str(e)}, status=500)
+
+
+@csrf_exempt
+def validate_invite_code(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        code_str = data.get('invite_code', '').strip().upper()
+
+        if not code_str or len(code_str) < 6:
+            return JsonResponse({'valid': False, 'msg': 'Code too short'}, status=400)
+
+        try:
+            invite = InviteCode.objects.select_related('tenant').get(code=code_str)
+        except InviteCode.DoesNotExist:
+            return JsonResponse({'valid': False, 'msg': 'Invalid invite code'})
+
+        if not invite.is_valid():
+            return JsonResponse({'valid': False, 'msg': 'Invite code is expired or used up'})
+
+        return JsonResponse({
+            'valid': True,
+            'organization': invite.tenant.organization,
+            'role': invite.role,
+        })
+
+    except Exception as e:
+        return JsonResponse({'valid': False, 'msg': str(e)}, status=500)
+
+
+@csrf_exempt
+def register_google(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        email = data.get('email', '').strip()
+        google_uid = data.get('google_uid', '')
+        display_name = data.get('display_name', '').strip()
+        mode = data.get('mode')  # "create" or "join"
+        org_name = data.get('org_name', '').strip()
+        invite_code_str = data.get('invite_code', '').strip().upper()
+
+        if not email:
+            return JsonResponse({'msg': 'Email is required'}, status=400)
+
+        # Check if user already exists — return their info for auto-login
+        existing = CustomUser.objects.filter(email=email).first()
+        if existing:
+            # Generate a deterministic password for authenticate() call
+            username = existing.username
+            password = f"{username}nutenai"
+            existing.set_password(password)
+            existing.save(update_fields=['password'])
+            return JsonResponse({
+                'status': 'existing_user',
+                'username': username,
+                'password': password,
+                'tenant_id': existing.tenant_id,
+                'user_id': existing.id,
+                'role': existing.role,
+            })
+
+        # New user
+        if mode not in ('create', 'join'):
+            return JsonResponse({'msg': 'Mode must be "create" or "join"'}, status=400)
+
+        # Derive username from email
+        base_username = email.split('@')[0].replace('.', '').replace('+', '')[:20]
+        username = base_username
+        counter = 1
+        while CustomUser.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
+        password = f"{username}nutenai"
+
+        with transaction.atomic():
+            if mode == 'create':
+                if not org_name:
+                    org_name = display_name or username
+
+                tenant_id = uuid.uuid4().hex[:12]
+                db_password = secrets.token_urlsafe(16)
+                key = generate_symmetric_key()
+
+                tenant = Tenant.objects.create(
+                    id=tenant_id,
+                    organization=org_name,
+                    db_user=f"crm_tenant_{tenant_id}",
+                    db_user_password=db_password,
+                    key=key,
+                )
+
+                user = CustomUser.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    phone_number='',
+                    role=CustomUser.ADMIN,
+                    organization=org_name,
+                    tenant=tenant,
+                )
+
+                invite = InviteCode.objects.create(
+                    code=InviteCode.generate_code(),
+                    tenant=tenant,
+                    created_by=user,
+                    role='employee',
+                )
+
+                return JsonResponse({
+                    'status': 'new_user',
+                    'username': username,
+                    'password': password,
+                    'tenant_id': tenant_id,
+                    'organization': org_name,
+                    'user_id': user.id,
+                    'invite_code': invite.code,
+                })
+
+            else:  # join
+                if not invite_code_str:
+                    return JsonResponse({'msg': 'Invite code is required for join mode'}, status=400)
+
+                try:
+                    invite = InviteCode.objects.get(code=invite_code_str)
+                except InviteCode.DoesNotExist:
+                    return JsonResponse({'msg': 'Invalid invite code'}, status=400)
+
+                if not invite.is_valid():
+                    return JsonResponse({'msg': 'Invite code is expired or used up'}, status=400)
+
+                tenant = invite.tenant
+                role = invite.role or CustomUser.EMPLOYEE
+
+                user = CustomUser.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    phone_number='',
+                    role=role,
+                    organization=tenant.organization,
+                    tenant=tenant,
+                )
+
+                invite.use_count += 1
+                invite.save(update_fields=['use_count'])
+
+                return JsonResponse({
+                    'status': 'new_user',
+                    'username': username,
+                    'password': password,
+                    'tenant_id': tenant.id,
+                    'organization': tenant.organization,
+                    'user_id': user.id,
+                    'role': role,
+                })
+
+    except IntegrityError as e:
+        logger.error(f"Google registration IntegrityError: {e}")
+        return JsonResponse({'msg': 'A user with that information already exists'}, status=400)
+    except Exception as e:
+        logger.error(f"Google registration error: {e}")
+        return JsonResponse({'msg': str(e)}, status=500)
