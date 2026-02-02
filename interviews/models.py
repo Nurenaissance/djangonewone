@@ -18,10 +18,13 @@ class InterviewResponse(models.Model):
     # Personal information
     candidate_name = models.CharField(max_length=200, blank=True, null=True)
     name = models.CharField(max_length=200, blank=True, null=True)
+    name_audio = models.TextField(blank=True, null=True, help_text='Audio URL for name')
     address = models.TextField(blank=True, null=True)
+    address_audio = models.TextField(blank=True, null=True, help_text='Audio URL for address')
 
     # Calibration and status
     calibration = models.CharField(max_length=100, blank=True, null=True)
+    calibration_audio = models.TextField(blank=True, null=True, help_text='Audio URL for calibration')
     status = models.CharField(max_length=50, default='pending', db_index=True)
 
     # Audio file URLs or Media IDs for questions
