@@ -1,6 +1,7 @@
 from rest_framework import generics, status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from django.db.models import Q
 from .models import InterviewResponse
 from .serializers import InterviewResponseSerializer, InterviewResponseCreateSerializer
@@ -326,6 +327,7 @@ def extract_session_data(session_conversations):
 
 
 @api_view(['POST', 'GET'])
+@permission_classes([AllowAny])
 def import_from_direct_chat(request):
     """
     POST/GET /interviews/import-from-chat/
