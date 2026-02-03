@@ -524,6 +524,20 @@ def import_from_direct_chat(request):
             phone = extract_phone_number(conv['contact_id'])
             phone_conversations[phone].append(conv)
 
+        # Pre-fetch contact names for all phones (FAST lookup)
+        contact_names = {}
+        try:
+            contacts = Contact.objects.filter(tenant=tenant).values('phone', 'name')
+            for c in contacts:
+                if c['phone'] and c['name']:
+                    # Normalize phone number for matching
+                    clean_phone = extract_phone_number(c['phone'])
+                    contact_names[clean_phone] = c['name']
+        except Exception as e:
+            logger.warning(f"Could not fetch contacts: {e}")
+
+        logger.info(f"Import: Loaded {len(contact_names)} contact names")
+
         # Build all entries to create
         entries_to_create = []
         skipped_count = 0
@@ -588,20 +602,23 @@ def import_from_direct_chat(request):
                 question3 = audio_urls[5] if len(audio_urls) > 5 else ''
                 question4 = audio_urls[6] if len(audio_urls) > 6 else ''
 
-                # Get name from text if available
-                name = ''
-                for text in text_messages[:3]:
-                    if text and 1 < len(text.split()) < 8 and len(text) < 100:
-                        name = text.strip()[:200]
-                        break
+                # Get candidate name from Contact (primary source)
+                candidate_name = contact_names.get(phone, '')
+
+                # Fallback: get name from text messages if no contact name
+                if not candidate_name:
+                    for text in text_messages[:3]:
+                        if text and 1 < len(text.split()) < 8 and len(text) < 100:
+                            candidate_name = text.strip()[:200]
+                            break
 
                 entries_to_create.append(InterviewResponse(
                     phone_no=phone,
                     tenant=tenant,
                     flow_name='interviewdrishtee',
                     timestamp=session_start,
-                    candidate_name=name or phone,
-                    name=name,
+                    candidate_name=candidate_name or phone,
+                    name=candidate_name,
                     name_audio=name_audio,
                     address='',
                     address_audio=address_audio,
