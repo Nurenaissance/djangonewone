@@ -207,6 +207,8 @@ def interview_stats(request):
     GET /interviews/stats/
     Get statistics for interview responses
     Requires X-Tenant-Id header
+
+    Returns user-friendly stats for non-technical dashboard users
     """
     tenant_id = request.headers.get('X-Tenant-Id') or request.headers.get('X-Tenant-ID')
     if not tenant_id:
@@ -217,16 +219,44 @@ def interview_stats(request):
 
     flow_name = request.query_params.get('flow_name', 'interviewdrishtee')
 
-    total_responses = InterviewResponse.objects.filter(
+    # Count from imported InterviewResponse table
+    total_imported_sessions = InterviewResponse.objects.filter(
         tenant_id=tenant_id,
         flow_name=flow_name
     ).count()
 
-    unique_numbers = InterviewResponse.objects.filter(
+    unique_imported_numbers = InterviewResponse.objects.filter(
         tenant_id=tenant_id,
         flow_name=flow_name
     ).values('phone_no').distinct().count()
 
+    # ALSO count from source Conversation table (actual unique contacts)
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        # Count unique contacts who sent messages (actual source data)
+        unique_source_contacts = Conversation.objects.filter(
+            tenant=tenant,
+            sender='user'
+        ).values('contact_id').distinct().count()
+
+        # Total user messages
+        total_user_messages = Conversation.objects.filter(
+            tenant=tenant,
+            sender='user'
+        ).count()
+
+        # Audio messages count
+        audio_messages = Conversation.objects.filter(
+            tenant=tenant,
+            sender='user',
+            message_type='audio'
+        ).count()
+    except Tenant.DoesNotExist:
+        unique_source_contacts = 0
+        total_user_messages = 0
+        audio_messages = 0
+
+    # Status breakdown for imported data
     status_counts = {}
     statuses = InterviewResponse.objects.filter(
         tenant_id=tenant_id,
@@ -243,9 +273,17 @@ def interview_stats(request):
         status_counts[status_name] = count
 
     return Response({
-        "total_responses": total_responses,
-        "unique_numbers": unique_numbers,
-        "status_breakdown": status_counts
+        # User-friendly labels for dashboard
+        "total_interviews": total_imported_sessions,  # Renamed for clarity
+        "unique_candidates": unique_imported_numbers,  # Renamed for clarity
+        "total_contacts_in_chat": unique_source_contacts,  # From source data
+        "pending_import": max(0, unique_source_contacts - unique_imported_numbers),  # Contacts not yet imported
+        "total_messages_received": total_user_messages,
+        "audio_responses_received": audio_messages,
+        "status_breakdown": status_counts,
+        # Legacy fields for backward compatibility
+        "total_responses": total_imported_sessions,
+        "unique_numbers": unique_imported_numbers,
     })
 
 
@@ -291,37 +329,122 @@ def group_into_sessions(conversations, session_gap_hours=2):
     return sessions
 
 
-def extract_session_data(session_conversations):
-    """Extract audio and text data from a session"""
+def extract_session_data(session_conversations, all_session_messages=None):
+    """
+    Extract audio and text data from a session by analyzing bot questions
+    Maps user responses to the correct variable based on the preceding bot question
+    """
     data = {
         'audio_urls': [],
         'text_messages': [],
         'timestamps': [],
         'calibration_audio': None,
         'calibration_text': None,
+        # New: properly mapped fields based on bot questions
+        'name': '',
+        'name_audio': '',
+        'address': '',
+        'address_audio': '',
+        'question1': '',
+        'question2': '',
+        'question3': '',
+        'question4': '',
+        'mapped_responses': {},  # variable_name -> response
     }
+
+    # Keywords to identify which question the bot is asking
+    QUESTION_KEYWORDS = {
+        'name': ['name', 'naam', 'नाम', 'your name', 'apna naam'],
+        'address': ['address', 'pata', 'पता', 'location', 'village', 'city', 'where do you live'],
+        'calibration': ['calibration', 'calib', 'test', 'count', '1 to 10', '1 se 10'],
+        'question1': ['question 1', 'question1', 'first question', 'pehla sawal', 'Q1'],
+        'question2': ['question 2', 'question2', 'second question', 'dusra sawal', 'Q2'],
+        'question3': ['question 3', 'question3', 'third question', 'teesra sawal', 'Q3'],
+        'question4': ['question 4', 'question4', 'fourth question', 'chautha sawal', 'Q4'],
+    }
+
+    # Track what the bot last asked
+    last_bot_question_type = None
+    response_index = 0  # Fallback: sequential index if we can't identify from bot message
 
     for conv in session_conversations:
         if conv.date_time:
             data['timestamps'].append(conv.date_time)
 
-        # Audio messages
-        if conv.message_type == 'audio' and conv.media_url:
-            # Check if it's calibration
-            caption = (conv.media_caption or '').lower()
-            if 'calibration' in caption or 'calib' in caption:
-                data['calibration_audio'] = conv.media_url
+        # Bot message - identify what question was asked
+        if conv.sender == 'bot' and conv.message_text:
+            msg_lower = conv.message_text.lower()
+            # Try to identify the question type from bot message
+            for qtype, keywords in QUESTION_KEYWORDS.items():
+                if any(kw in msg_lower for kw in keywords):
+                    last_bot_question_type = qtype
+                    break
             else:
-                data['audio_urls'].append(conv.media_url)
+                # Couldn't identify, use sequential order
+                last_bot_question_type = None
 
-        # Text messages
-        if conv.message_text:
-            text = conv.message_text.lower()
-            # Check if calibration text
-            if 'calibration' in text:
-                data['calibration_text'] = conv.message_text
-            else:
+        # User response
+        elif conv.sender == 'user':
+            response_value = None
+            response_type = 'text'
+
+            if conv.message_type == 'audio' and conv.media_url:
+                response_value = conv.media_url
+                response_type = 'audio'
+                data['audio_urls'].append(conv.media_url)
+            elif conv.message_text:
+                response_value = conv.message_text
+                response_type = 'text'
                 data['text_messages'].append(conv.message_text)
+
+            if response_value:
+                # Map to the correct field
+                if last_bot_question_type:
+                    # We know what the bot asked
+                    if last_bot_question_type == 'name':
+                        if response_type == 'audio':
+                            data['name_audio'] = response_value
+                        else:
+                            data['name'] = response_value[:200]
+                    elif last_bot_question_type == 'address':
+                        if response_type == 'audio':
+                            data['address_audio'] = response_value
+                        else:
+                            data['address'] = response_value
+                    elif last_bot_question_type == 'calibration':
+                        if response_type == 'audio':
+                            data['calibration_audio'] = response_value
+                        else:
+                            data['calibration_text'] = response_value
+                    elif last_bot_question_type in ['question1', 'question2', 'question3', 'question4']:
+                        data[last_bot_question_type] = response_value
+
+                    data['mapped_responses'][last_bot_question_type] = response_value
+                    last_bot_question_type = None  # Reset after mapping
+                else:
+                    # Fallback: use sequential order
+                    # Order: name, address, calibration, q1, q2, q3, q4
+                    FALLBACK_ORDER = ['name', 'address', 'calibration', 'question1', 'question2', 'question3', 'question4']
+                    if response_index < len(FALLBACK_ORDER):
+                        field = FALLBACK_ORDER[response_index]
+                        if field == 'name':
+                            if response_type == 'audio':
+                                data['name_audio'] = response_value
+                            else:
+                                data['name'] = response_value[:200]
+                        elif field == 'address':
+                            if response_type == 'audio':
+                                data['address_audio'] = response_value
+                            else:
+                                data['address'] = response_value
+                        elif field == 'calibration':
+                            if response_type == 'audio':
+                                data['calibration_audio'] = response_value
+                            else:
+                                data['calibration_text'] = response_value
+                        else:
+                            data[field] = response_value
+                    response_index += 1
 
     return data
 
@@ -337,6 +460,7 @@ def import_from_direct_chat(request):
     Query params or Body:
         tenant_id: Tenant ID (default: ehgymjv)
         session_gap_hours: Hours between sessions (default: 2)
+        force_reimport: Set to 'true' to delete existing data and re-import with corrected audio mapping
 
     Returns:
         {
@@ -352,9 +476,11 @@ def import_from_direct_chat(request):
         if request.method == 'POST':
             tenant_id = request.data.get('tenant_id', 'ehgymjv')
             session_gap_hours = int(request.data.get('session_gap_hours', 2))
+            force_reimport = str(request.data.get('force_reimport', 'false')).lower() == 'true'
         else:
             tenant_id = request.query_params.get('tenant_id', 'ehgymjv')
             session_gap_hours = int(request.query_params.get('session_gap_hours', 2))
+            force_reimport = request.query_params.get('force_reimport', 'false').lower() == 'true'
 
         # Get tenant
         try:
@@ -368,15 +494,24 @@ def import_from_direct_chat(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Get all conversations
+        # If force_reimport, delete existing data to re-import with corrected audio mapping
+        deleted_count = 0
+        if force_reimport:
+            deleted_count = InterviewResponse.objects.filter(
+                tenant=tenant,
+                flow_name='interviewdrishtee'
+            ).delete()[0]
+            logger.info(f"Import: Force reimport - deleted {deleted_count} existing entries")
+
+        # Get all conversations (BOTH user and bot messages to understand question context)
         conversations = Conversation.objects.filter(
             tenant=tenant,
-            sender='user'
+            sender__in=['user', 'bot']  # Include bot messages to identify questions
         ).order_by('contact_id', 'date_time')
 
-        logger.info(f"Import: Found {conversations.count()} user messages for tenant {tenant_id}")
+        logger.info(f"Import: Found {conversations.count()} messages (user + bot) for tenant {tenant_id}")
 
-        # Group by phone first
+        # Group by phone first (include both user and bot messages)
         phone_conversations = defaultdict(list)
         for conv in conversations:
             phone = extract_phone_number(conv.contact_id)
@@ -425,47 +560,57 @@ def import_from_direct_chat(request):
                 skipped_count += 1
                 continue
 
-            # Get name from Contact
-            name = ''
-            address = ''
-            try:
-                contact = Contact.objects.filter(phone=phone, tenant=tenant).first()
-                if contact:
-                    name = contact.name or ''
-                    address = contact.address or ''
-            except:
-                pass
+            # Use mapped fields from session_data (properly matched to bot questions)
+            name = session_data.get('name', '')
+            name_audio = session_data.get('name_audio', '')
+            address = session_data.get('address', '')
+            address_audio = session_data.get('address_audio', '')
 
-            # Extract name from text if not found
-            if not name and session_data['text_messages']:
+            # Get name from Contact if not found in session
+            if not name and not name_audio:
+                try:
+                    contact = Contact.objects.filter(phone=phone, tenant=tenant).first()
+                    if contact:
+                        name = contact.name or ''
+                        if not address and not address_audio:
+                            address = contact.address or ''
+                except:
+                    pass
+
+            # Extract name from text messages if still not found
+            if not name and not name_audio and session_data['text_messages']:
                 for text in session_data['text_messages'][:5]:
                     if 2 < len(text.split()) < 10 and len(text) < 100:
                         name = text.strip()[:200]
                         break
 
-            # Assign audio URLs to questions
-            question1 = session_data['audio_urls'][0] if len(session_data['audio_urls']) > 0 else ''
-            question2 = session_data['audio_urls'][1] if len(session_data['audio_urls']) > 1 else ''
-            question3 = session_data['audio_urls'][2] if len(session_data['audio_urls']) > 2 else ''
-            question4 = session_data['audio_urls'][3] if len(session_data['audio_urls']) > 3 else ''
+            # Use properly mapped question fields (matched to bot questions)
+            question1 = session_data.get('question1', '')
+            question2 = session_data.get('question2', '')
+            question3 = session_data.get('question3', '')
+            question4 = session_data.get('question4', '')
 
-            # Calibration
+            # Calibration - prefer audio, fallback to text
             calibration = ''
-            if session_data['calibration_audio']:
-                calibration = session_data['calibration_audio']
-            elif session_data['calibration_text']:
+            calibration_audio = session_data.get('calibration_audio', '')
+            if calibration_audio:
+                calibration = calibration_audio
+            elif session_data.get('calibration_text'):
                 calibration = session_data['calibration_text'][:200]
 
-            # Create entry
+            # Create entry with properly mapped fields
             response = InterviewResponse.objects.create(
                 phone_no=phone,
                 tenant=tenant,
                 flow_name='interviewdrishtee',
                 timestamp=session_start,
-                candidate_name=name,
+                candidate_name=name or 'Unknown',
                 name=name,
+                name_audio=name_audio,
                 address=address,
+                address_audio=address_audio,
                 calibration=calibration,
+                calibration_audio=calibration_audio,
                 status='completed',
                 question1=question1,
                 question2=question2,
@@ -483,13 +628,20 @@ def import_from_direct_chat(request):
 
             logger.info(f"Import: Created entry ID {response.id} for {phone}")
 
-        # Return summary
+        # Return summary with user-friendly labels
+        unique_contacts = len(phone_conversations)
+        message = f"Refresh complete! Imported {imported_count} interview sessions from {unique_contacts} contacts."
+        if force_reimport and deleted_count > 0:
+            message = f"Re-imported {imported_count} sessions (replaced {deleted_count} old entries with corrected audio mapping)."
+
         return Response({
             "success": True,
             "imported_count": imported_count,
             "skipped_count": skipped_count,
             "total_sessions": len(all_sessions),
-            "message": f"Import completed successfully. Imported {imported_count} sessions, skipped {skipped_count}.",
+            "unique_contacts": unique_contacts,
+            "deleted_count": deleted_count if force_reimport else 0,
+            "message": message,
             "details": imported_details[:20]  # Return first 20 for reference
         })
 

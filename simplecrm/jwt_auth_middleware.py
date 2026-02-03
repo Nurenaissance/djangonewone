@@ -22,6 +22,7 @@ EXCLUDED_PATHS = [
     "/facebook-callback/",
     "/add-dynamic-data/",
     "/admin/",  # Django admin uses its own auth
+    "/interviews/import-from-chat/",  # Public endpoint for chat import
 ]
 
 # Origins that bypass authentication (trusted internal services)
