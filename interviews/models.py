@@ -23,7 +23,7 @@ class InterviewResponse(models.Model):
     address_audio = models.TextField(blank=True, null=True, help_text='Audio URL for address')
 
     # Calibration and status
-    calibration = models.CharField(max_length=100, blank=True, null=True)
+    calibration = models.TextField(blank=True, null=True)
     calibration_audio = models.TextField(blank=True, null=True, help_text='Audio URL for calibration')
     status = models.CharField(max_length=50, default='pending', db_index=True)
 
