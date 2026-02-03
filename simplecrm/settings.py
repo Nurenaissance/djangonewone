@@ -334,3 +334,11 @@ CELERY_TASK_ROUTES = {
     'interaction.tasks.process_conversations' : {'queue': 'process_conv_queue'},
     'helpers.tasks.bulk_upload_contacts' : {'queue': 'upload_file_queue'},
 }
+
+# ============================================================================
+# AZURE BLOB STORAGE CONFIGURATION
+# ============================================================================
+# Configuration for storing interview audio files in Azure Blob Storage
+AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
+AZURE_STORAGE_CONTAINER = os.getenv('AZURE_STORAGE_CONTAINER', 'media')
+AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME', '')

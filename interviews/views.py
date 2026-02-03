@@ -666,3 +666,189 @@ def import_from_direct_chat(request):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ============================================================================
+# PUBLIC INTERVIEW PAGE ENDPOINTS (No authentication required)
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def public_interview_submit(request):
+    """
+    POST /public/interview/submit/
+    Public endpoint for submitting interview responses from the web form
+    No authentication or tenant required
+
+    This endpoint:
+    1. Accepts multipart form data with audio files
+    2. Uploads audio files to Azure Blob Storage
+    3. Creates an InterviewResponse record without tenant
+
+    Form data:
+        - phone_number: Candidate's phone number (required)
+        - candidate_name: Candidate's full name (required)
+        - interview_type: 'vidushi' or 'maan_vidushi' (required)
+        - calibration_audio: Audio file for Q0 calibration (required)
+        - part1_audio: Audio file for Part 1 questions (required)
+        - part2_audio: Audio file for Part 2 questions (required)
+        - submission_ip: IP address (optional)
+        - user_agent: Browser user agent (optional)
+
+    Returns:
+        {
+            "success": true,
+            "message": "Interview submitted successfully",
+            "data": {
+                "id": 123,
+                "phone_number": "919999999999",
+                "candidate_name": "John Doe",
+                "interview_type": "vidushi",
+                "timestamp": "2026-02-03T14:30:22Z"
+            }
+        }
+    """
+    try:
+        from .azure_storage import get_azure_storage_client
+
+        # Validate required fields
+        phone_number = request.data.get('phone_number')
+        candidate_name = request.data.get('candidate_name')
+        interview_type = request.data.get('interview_type')
+
+        if not all([phone_number, candidate_name, interview_type]):
+            return Response(
+                {
+                    "success": False,
+                    "error": "phone_number, candidate_name, and interview_type are required"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate interview type
+        if interview_type not in ['vidushi', 'maan_vidushi']:
+            return Response(
+                {
+                    "success": False,
+                    "error": "interview_type must be 'vidushi' or 'maan_vidushi'"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get audio files from request
+        calibration_audio_file = request.FILES.get('calibration_audio')
+        part1_audio_file = request.FILES.get('part1_audio')
+        part2_audio_file = request.FILES.get('part2_audio')
+
+        if not all([calibration_audio_file, part1_audio_file, part2_audio_file]):
+            return Response(
+                {
+                    "success": False,
+                    "error": "All three audio files are required: calibration_audio, part1_audio, part2_audio"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Initialize Azure Storage client
+        try:
+            azure_client = get_azure_storage_client()
+        except Exception as e:
+            logger.error(f"Failed to initialize Azure Storage client: {e}")
+            return Response(
+                {
+                    "success": False,
+                    "error": "Storage service is not available. Please try again later."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        # Upload audio files to Azure Blob Storage
+        calibration_url = azure_client.upload_audio_file(
+            file_data=calibration_audio_file,
+            candidate_name=candidate_name,
+            interview_type=interview_type,
+            part_name='calibration',
+            file_extension='wav'
+        )
+
+        part1_url = azure_client.upload_audio_file(
+            file_data=part1_audio_file,
+            candidate_name=candidate_name,
+            interview_type=interview_type,
+            part_name='part1',
+            file_extension='wav'
+        )
+
+        part2_url = azure_client.upload_audio_file(
+            file_data=part2_audio_file,
+            candidate_name=candidate_name,
+            interview_type=interview_type,
+            part_name='part2',
+            file_extension='wav'
+        )
+
+        # Check if all uploads succeeded
+        if not all([calibration_url, part1_url, part2_url]):
+            logger.error("One or more audio files failed to upload to Azure Storage")
+            return Response(
+                {
+                    "success": False,
+                    "error": "Failed to upload audio files. Please try again."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # Get optional metadata
+        submission_ip = request.data.get('submission_ip') or request.META.get('REMOTE_ADDR')
+        user_agent = request.data.get('user_agent') or request.META.get('HTTP_USER_AGENT')
+
+        # Create InterviewResponse record (without tenant for public submissions)
+        interview_response = InterviewResponse.objects.create(
+            phone_no=phone_number,
+            candidate_name=candidate_name,
+            interview_type=interview_type,
+            flow_name='naad_2.0_interview',
+            calibration_audio=calibration_url,
+            part1_audio=part1_url,
+            part2_audio=part2_url,
+            status='completed',
+            submission_ip=submission_ip,
+            user_agent=user_agent,
+            tenant=None  # Public submissions have no tenant
+        )
+
+        logger.info(
+            f"Public interview submitted successfully: "
+            f"phone={phone_number}, name={candidate_name}, type={interview_type}, id={interview_response.id}"
+        )
+
+        # Return success response
+        return Response(
+            {
+                "success": True,
+                "message": "Interview submitted successfully! Thank you for your response.",
+                "data": {
+                    "id": interview_response.id,
+                    "phone_number": interview_response.phone_no,
+                    "candidate_name": interview_response.candidate_name,
+                    "interview_type": interview_response.interview_type,
+                    "timestamp": interview_response.timestamp.isoformat(),
+                    "audio_files": {
+                        "calibration": calibration_url,
+                        "part1": part1_url,
+                        "part2": part2_url
+                    }
+                }
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+    except Exception as e:
+        logger.error(f"Error in public interview submission: {str(e)}", exc_info=True)
+        return Response(
+            {
+                "success": False,
+                "error": "An unexpected error occurred. Please try again later."
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
