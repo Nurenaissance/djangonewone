@@ -230,9 +230,61 @@ def upload_file(request, df):
                     return JsonResponse({"error": f"Error processing file_name: {e}"}, status=500)
             df_new = df_new.to_json(orient="records")
             df_new_json = json.loads(df_new)
-            bulk_upload_contacts.delay(df_new_json, tenant_id)
 
-            return JsonResponse({"success": "Contacts are being uploaded"}, status = 200)
+            # TEMPORARY: Use synchronous upload until Celery queue issue is resolved
+            # TODO: Re-enable async after confirming upload_file_queue is being processed
+            USE_CELERY = False  # Set to True when Celery is confirmed working
+
+            if USE_CELERY:
+                try:
+                    bulk_upload_contacts.delay(df_new_json, tenant_id)
+                    return JsonResponse({"success": "Contacts are being uploaded", "count": len(df_new_json)}, status = 200)
+                except Exception as celery_error:
+                    logger.error(f"Celery failed: {celery_error}")
+                    USE_CELERY = False  # Fall through to synchronous
+
+            if not USE_CELERY:
+                # Synchronous upload - immediate creation
+                logger.info(f"Starting synchronous upload of {len(df_new_json)} contacts for tenant {tenant_id}")
+                try:
+                    from contacts.models import Contact
+                    from tenant.models import Tenant
+
+                    tenant = Tenant.objects.get(id=tenant_id)
+                    contacts_created = 0
+                    contacts_to_create = []
+
+                    for contact_data in df_new_json:
+                        contact_fields = {}
+                        custom_fields = {}
+
+                        for field, value in contact_data.items():
+                            # Skip null/NaN values
+                            if pd.isna(value):
+                                continue
+                            if hasattr(Contact, field) and field not in ['customField', 'tenant', 'id', 'createdOn']:
+                                contact_fields[field] = value
+                            else:
+                                custom_fields[field] = value
+
+                        contact_fields['customField'] = json.dumps(custom_fields) if custom_fields else None
+                        contact_fields['tenant'] = tenant
+
+                        contacts_to_create.append(Contact(**contact_fields))
+                        contacts_created += 1
+
+                    # Bulk create for better performance
+                    Contact.objects.bulk_create(contacts_to_create, ignore_conflicts=True)
+
+                    logger.info(f"Successfully created {contacts_created} contacts synchronously")
+                    return JsonResponse({
+                        "success": "Contacts uploaded successfully!",
+                        "count": contacts_created
+                    }, status=200)
+
+                except Exception as sync_error:
+                    logger.error(f"Synchronous upload failed: {sync_error}", exc_info=True)
+                    return JsonResponse({"error": f"Upload failed: {str(sync_error)}"}, status=500)
             
         except Exception as e:
             print(f"Unexpected error: {e}")
