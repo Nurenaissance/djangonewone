@@ -88,22 +88,37 @@ def upload_file(request, df):
         try:
             print("Entering upload file")
             print("df: ", df[:5])
-            
+
             model_name = request.POST.get('model_name')
             xls_file = request.FILES.get('file')
             tenant_id = request.headers.get('X-Tenant-Id')
-            
+
             print("Received model_name: ", model_name)
-            
+
             if not (xls_file.name.endswith('.xls') or xls_file.name.endswith('.xlsx') or xls_file.name.endswith('.csv')):
                 return JsonResponse({"error": "File is not in XLS/XLSX/CSV format"}, status=400)
 
             if model_name:
                 try:
+                    # PREPROCESSING: Combine first_name + last_name into 'name' BEFORE AI mapping
+                    if 'first_name' in df.columns and 'last_name' in df.columns:
+                        print("Combining first_name and last_name into 'name' column")
+                        df['name'] = df['first_name'].fillna('').astype(str) + ' ' + df['last_name'].fillna('').astype(str)
+                        df['name'] = df['name'].str.strip()
+                        # Drop the original columns to avoid confusion
+                        df = df.drop(columns=['first_name', 'last_name'])
+                        print("Name column created, first_name and last_name removed")
+                    elif 'first_name' in df.columns and 'name' not in df.columns:
+                        print("Renaming first_name to name")
+                        df = df.rename(columns={'first_name': 'name'})
+                    elif 'last_name' in df.columns and 'name' not in df.columns:
+                        print("Renaming last_name to name")
+                        df = df.rename(columns={'last_name': 'name'})
+
                     table_name = table_mappings.get(model_name)
                     field_names = get_tableFields(table_name)
                     column_names = df.columns.tolist()
-                    print(column_names)
+                    print("Columns after preprocessing:", column_names)
                     
                     try:
                         field_mapping = mappingFunc(column_names, field_names)

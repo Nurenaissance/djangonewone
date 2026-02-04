@@ -167,45 +167,54 @@ def dispatcher(request):
 
                 # ---------------- VALIDATION ----------------
 
-                # Required structure
-                expected_columns = {
-                    "first_name", "last_name", "company_name", "address", "city",
-                    "county", "state", "zip", "phone", "email"
+                # RELAXED REQUIREMENTS: Only phone is mandatory
+                mandatory_columns = {"phone"}
+                recommended_columns = {
+                    "first_name", "last_name", "name", "company_name", "address", "city",
+                    "county", "state", "zip", "email"
                 }
 
                 # Normalize column names for validation (CASE INSENSITIVE)
                 cleaned_df_columns = {str(col).strip().lower(): col for col in df.columns}
-                expected_lower = {col.lower() for col in expected_columns}
 
-                # Check missing columns (but extra allowed)
-                missing = expected_lower - cleaned_df_columns.keys()
-
-                if missing:
+                # Check for mandatory phone column
+                if "phone" not in cleaned_df_columns:
                     return JsonResponse({
                         'error': (
-                            "Invalid column structure.\n\n"
-                            f"Missing required columns:\n{', '.join(missing)}\n\n"
-                            "Expected at minimum:\n"
-                            + ", ".join(expected_columns) +
-                            "\n\nExtra columns are allowed — do not remove required ones."
+                            "Missing required column: 'phone'\n\n"
+                            "The Excel file MUST have a 'phone' column with valid phone numbers.\n\n"
+                            "Recommended columns:\n" +
+                            ", ".join(sorted(recommended_columns)) +
+                            "\n\nOther columns are optional and will be stored as custom fields."
                         )
                     }, status=400)
 
                 # Ensure phone column has some usable data
-                phone_col_name = cleaned_df_columns[[c for c in cleaned_df_columns if c == "phone"][0]]
+                phone_col_name = cleaned_df_columns["phone"]
                 if df[phone_col_name].isnull().all():
                     return JsonResponse({
-                        'error': "The 'phone' column must contain at least one valid phone number."
+                        'error': (
+                            "The 'phone' column is empty.\n\n"
+                            "Please ensure at least one row has a valid phone number.\n"
+                            "Valid formats: 10-digit (9123456789), 12-digit with country code (919123456789)"
+                        )
                     }, status=400)
 
                 # ---------------- NORMALIZATION ----------------
 
-                # Rename to normalized lowercase names (but keep extra columns untouched)
-                rename_map = {cleaned_df_columns[col]: col for col in expected_lower}
-                df.rename(columns={v: k for k, v in rename_map.items()}, inplace=True)  # normalized
+                # Rename columns to lowercase for consistency
+                df.columns = [str(col).strip().lower() for col in df.columns]
 
-                # Ensure required columns exist and remain first — extra columns stay after
-                ordered_cols = list(expected_lower) + [c for c in df.columns if c not in expected_lower]
+                # Merge first_name + last_name into 'name' if needed
+                if 'first_name' in df.columns and 'last_name' in df.columns:
+                    if 'name' not in df.columns:
+                        df['name'] = df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
+                        df['name'] = df['name'].str.strip()
+
+                # Ensure phone column is first, followed by name/email if present
+                priority_cols = ['phone', 'name', 'first_name', 'last_name', 'email']
+                ordered_cols = [c for c in priority_cols if c in df.columns] + \
+                               [c for c in df.columns if c not in priority_cols]
                 df = df[ordered_cols]
 
                 # ---------------- FINAL PROCESS ----------------

@@ -209,7 +209,11 @@ def interview_stats(request):
     Requires X-Tenant-Id header
 
     Returns user-friendly stats for non-technical dashboard users
+    OPTIMIZED: Uses caching to prevent worker timeouts
     """
+    from django.core.cache import cache
+    from django.db.models import Count
+
     tenant_id = request.headers.get('X-Tenant-Id') or request.headers.get('X-Tenant-ID')
     if not tenant_id:
         return Response(
@@ -219,72 +223,63 @@ def interview_stats(request):
 
     flow_name = request.query_params.get('flow_name', 'interviewdrishtee')
 
-    # Count from imported InterviewResponse table
-    total_imported_sessions = InterviewResponse.objects.filter(
-        tenant_id=tenant_id,
-        flow_name=flow_name
-    ).count()
+    # Cache key for this tenant's stats
+    cache_key = f"interview_stats_{tenant_id}_{flow_name}"
 
-    unique_imported_numbers = InterviewResponse.objects.filter(
-        tenant_id=tenant_id,
-        flow_name=flow_name
-    ).values('phone_no').distinct().count()
+    # Try to get from cache first (5 minute TTL)
+    cached_stats = cache.get(cache_key)
+    if cached_stats:
+        logger.info(f"Returning cached stats for tenant {tenant_id}")
+        return Response(cached_stats)
 
-    # ALSO count from source Conversation table (actual unique contacts)
     try:
-        tenant = Tenant.objects.get(id=tenant_id)
-        # Count unique contacts who sent messages (actual source data)
-        unique_source_contacts = Conversation.objects.filter(
-            tenant=tenant,
-            sender='user'
-        ).values('contact_id').distinct().count()
-
-        # Total user messages
-        total_user_messages = Conversation.objects.filter(
-            tenant=tenant,
-            sender='user'
-        ).count()
-
-        # Audio messages count
-        audio_messages = Conversation.objects.filter(
-            tenant=tenant,
-            sender='user',
-            message_type='audio'
-        ).count()
-    except Tenant.DoesNotExist:
-        unique_source_contacts = 0
-        total_user_messages = 0
-        audio_messages = 0
-
-    # Status breakdown for imported data
-    status_counts = {}
-    statuses = InterviewResponse.objects.filter(
-        tenant_id=tenant_id,
-        flow_name=flow_name
-    ).values('status').distinct()
-
-    for status_obj in statuses:
-        status_name = status_obj['status']
-        count = InterviewResponse.objects.filter(
+        # Use select_related sparingly and limit query complexity
+        base_qs = InterviewResponse.objects.filter(
             tenant_id=tenant_id,
-            flow_name=flow_name,
-            status=status_name
-        ).count()
-        status_counts[status_name] = count
+            flow_name=flow_name
+        )
 
-    return Response({
-        # User-friendly labels for dashboard
-        "total_interviews": total_imported_sessions,  # Renamed for clarity
-        "unique_candidates": unique_imported_numbers,  # Renamed for clarity
-        "total_contacts_in_chat": unique_source_contacts,  # From source data
-        "pending_import": max(0, unique_source_contacts - unique_imported_numbers),  # Contacts not yet imported
-        "total_messages_received": total_user_messages,
-        "audio_responses_received": audio_messages,
-        "status_breakdown": status_counts,
-        # Legacy fields for backward compatibility
-        "total_responses": total_imported_sessions,
-        "unique_numbers": unique_imported_numbers,
-    })
+        # Get counts efficiently in single aggregation query
+        stats_aggregate = base_qs.aggregate(
+            total_count=Count('id'),
+            unique_phones=Count('phone_no', distinct=True)
+        )
+
+        total_imported_sessions = stats_aggregate['total_count'] or 0
+        unique_imported_numbers = stats_aggregate['unique_phones'] or 0
+
+        # Status breakdown using efficient aggregation
+        status_counts_qs = base_qs.values('status').annotate(count=Count('id'))
+        status_counts = {item['status']: item['count'] for item in status_counts_qs}
+
+        stats_data = {
+            # Core interview stats (fast)
+            "total_interviews": total_imported_sessions,
+            "unique_candidates": unique_imported_numbers,
+            "status_breakdown": status_counts,
+
+            # Legacy fields for backward compatibility
+            "total_responses": total_imported_sessions,
+            "unique_numbers": unique_imported_numbers,
+        }
+
+        # Cache for 5 minutes
+        cache.set(cache_key, stats_data, 300)
+
+        logger.info(f"Computed and cached stats for tenant {tenant_id}: {total_imported_sessions} interviews")
+        return Response(stats_data)
+
+    except Exception as e:
+        logger.error(f"Error in interview_stats for tenant {tenant_id}: {str(e)}", exc_info=True)
+        # Return minimal stats on error to prevent complete failure
+        return Response({
+            "total_interviews": 0,
+            "unique_candidates": 0,
+            "status_breakdown": {},
+            "total_responses": 0,
+            "unique_numbers": 0,
+            "error": "Stats temporarily unavailable"
+        }, status=status.HTTP_200_OK)
 
 
 # Helper functions for import
