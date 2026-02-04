@@ -23,6 +23,7 @@ EXCLUDED_PATHS = [
     "/add-dynamic-data/",
     "/admin/",  # Django admin uses its own auth
     "/interviews/import-from-chat/",  # Public endpoint for chat import
+    "/interviews/public/submit/",  # Public interview submission from web form
 ]
 
 # Origins that bypass authentication (trusted internal services)
