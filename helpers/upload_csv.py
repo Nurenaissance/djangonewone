@@ -15,6 +15,9 @@ import re
 import logging
 from .tasks import bulk_upload_contacts
 
+# Initialize logger
+logger = logging.getLogger(__name__)
+
 # Assuming df is your DataFrame
 default_timestamp = '1970-01-01 00:00:00'
 
