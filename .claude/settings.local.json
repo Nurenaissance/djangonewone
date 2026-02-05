@@ -6,7 +6,8 @@
       "Bash(pytest:*)",
       "Bash(npm install)",
       "Bash(npm test)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(python -m pytest:*)"
     ]
   }
 }

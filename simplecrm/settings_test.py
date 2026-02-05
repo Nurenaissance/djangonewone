@@ -116,3 +116,13 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Time zone
 TIME_ZONE = 'UTC'
 USE_TZ = True
+
+# Static files (required for Django)
+STATIC_URL = '/static/'
+
+# Language
+LANGUAGE_CODE = 'en-us'
+USE_I18N = True
+
+# WSGI
+WSGI_APPLICATION = 'simplecrm.wsgi.application'

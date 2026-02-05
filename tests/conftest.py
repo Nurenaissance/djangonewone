@@ -257,15 +257,16 @@ def mock_redis_unhealthy():
 # ==============================================================================
 
 @pytest.fixture
-def interview(db, tenant, contact):
-    """Create a test interview."""
-    from interviews.models import Interview
+def interview_response(db, tenant):
+    """Create a test interview response."""
+    from interviews.models import InterviewResponse
 
-    interview = Interview.objects.create(
+    interview = InterviewResponse.objects.create(
         tenant=tenant,
-        contact=contact,
-        status='pending',
-        scheduled_at=timezone.now() + timedelta(hours=1)
+        phone_no='919876543210',
+        candidate_name='Test Candidate',
+        interview_type='vidushi',
+        status='pending'
     )
     return interview
 
