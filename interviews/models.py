@@ -40,6 +40,10 @@ class InterviewResponse(models.Model):
     # Timestamp
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    # Session timestamp - the actual conversation/session start time (used for deduplication)
+    session_timestamp = models.DateTimeField(null=True, blank=True, db_index=True,
+        help_text='Actual session start time from conversations (for deduplication)')
+
     # Personal information
     candidate_name = models.CharField(max_length=200, blank=True, null=True, help_text='Full name of the candidate')
     name = models.CharField(max_length=200, blank=True, null=True)
@@ -101,6 +105,14 @@ class InterviewResponse(models.Model):
             models.Index(fields=['phone_no', '-timestamp']),
             models.Index(fields=['interview_type', 'status', '-timestamp']),
             models.Index(fields=['candidate_name', '-timestamp']),
+        ]
+        constraints = [
+            # Prevent duplicate imports: one entry per phone+tenant+flow+session_timestamp
+            models.UniqueConstraint(
+                fields=['phone_no', 'tenant', 'flow_name', 'session_timestamp'],
+                name='unique_interview_session',
+                condition=models.Q(session_timestamp__isnull=False)
+            ),
         ]
 
     def __str__(self):

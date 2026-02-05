@@ -1,9 +1,69 @@
 from django.views.decorators.csrf import csrf_exempt
-from django.http import HttpResponseBadRequest,JsonResponse
-import os, pandas as pd,json, requests, pymupdf
+from django.http import HttpResponseBadRequest, JsonResponse
+import os
+import pandas as pd
+import json
+import requests
+import pymupdf
+import logging
 from .vectorize import vectorize_FAISS, vectorize
 from .table_from_img import data_from_image
 from .upload_csv import upload_file
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# FILE UPLOAD LIMITS - Prevent memory exhaustion and DoS
+# ============================================================================
+MAX_FILE_SIZE_MB = 50  # Maximum file size in MB
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+MAX_ROWS = 100000  # Maximum rows in CSV/Excel files
+
+
+def validate_file_upload(uploaded_file):
+    """
+    Validate uploaded file size and basic sanity checks.
+    Raises ValueError if validation fails.
+    """
+    if not uploaded_file:
+        raise ValueError("No file provided")
+
+    # Check file size
+    file_size = uploaded_file.size
+    if file_size > MAX_FILE_SIZE_BYTES:
+        raise ValueError(
+            f"File too large: {file_size / (1024*1024):.1f}MB. "
+            f"Maximum allowed: {MAX_FILE_SIZE_MB}MB"
+        )
+
+    # Check file name
+    if not uploaded_file.name:
+        raise ValueError("File must have a name")
+
+    file_extension = os.path.splitext(uploaded_file.name)[1].lower()
+    allowed_extensions = ['.csv', '.xlsx', '.xls', '.pdf', '.png', '.jpg', '.jpeg']
+
+    if file_extension not in allowed_extensions:
+        raise ValueError(
+            f"Unsupported file type: {file_extension}. "
+            f"Allowed: {', '.join(allowed_extensions)}"
+        )
+
+    logger.info(f"📁 File validated: {uploaded_file.name} ({file_size / 1024:.1f}KB)")
+    return True
+
+
+def validate_dataframe_size(df, filename="file"):
+    """
+    Validate DataFrame row count to prevent memory issues.
+    """
+    if len(df) > MAX_ROWS:
+        raise ValueError(
+            f"Too many rows in {filename}: {len(df):,}. "
+            f"Maximum allowed: {MAX_ROWS:,}"
+        )
+    logger.info(f"📊 DataFrame validated: {len(df):,} rows")
+    return True
 
 
 
@@ -95,9 +155,16 @@ def dispatcher(request):
             tenant_id = request.headers.get('X-Tenant-Id')
 
             if uploaded_file:
+                # SECURITY: Validate file before processing
+                try:
+                    validate_file_upload(uploaded_file)
+                except ValueError as e:
+                    logger.warning(f"⚠️ File validation failed: {e}")
+                    return JsonResponse({'error': str(e)}, status=400)
+
                 file_name = uploaded_file.name
                 file_extension = os.path.splitext(uploaded_file.name)[1].lower()
-                print(f"extn: {file_extension} name: {file_name}")
+                logger.info(f"📁 Processing upload: {file_name} ({file_extension})")
 
             if file_extension == '.pdf':
                 try:
@@ -130,6 +197,12 @@ def dispatcher(request):
                     return JsonResponse({'error': 'Error parsing CSV file'}, status=400)
                 except Exception as e:
                     return JsonResponse({'error': f"Error reading CSV file: {str(e)}"}, status=400)
+
+                # SECURITY: Validate row count
+                try:
+                    validate_dataframe_size(df, file_name)
+                except ValueError as e:
+                    return JsonResponse({'error': str(e)}, status=400)
 
                 try:
                     new_df = create_subfile(df, columns_text, merge_columns)
@@ -164,6 +237,12 @@ def dispatcher(request):
 
                 except Exception as e:
                     return JsonResponse({'error': f"Error reading Excel file: {str(e)}"}, status=400)
+
+                # SECURITY: Validate row count
+                try:
+                    validate_dataframe_size(df, file_name)
+                except ValueError as e:
+                    return JsonResponse({'error': str(e)}, status=400)
 
                 # ---------------- VALIDATION ----------------
 

@@ -527,7 +527,7 @@ def import_from_direct_chat(request):
         if not force_reimport:
             existing_sessions = set(
                 InterviewResponse.objects.filter(tenant=tenant, flow_name='interviewdrishtee')
-                .values_list('phone_no', 'timestamp')
+                .values_list('phone_no', 'session_timestamp')
             )
 
         # Get user conversations only (simpler and faster)
@@ -638,7 +638,7 @@ def import_from_direct_chat(request):
                     phone_no=phone,
                     tenant=tenant,
                     flow_name='interviewdrishtee',
-                    timestamp=session_start,
+                    session_timestamp=session_start,  # Use session_timestamp for deduplication
                     candidate_name=candidate_name or phone,
                     name=candidate_name,
                     name_audio=name_audio,

@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell -Command \"Get-Content ''C:\\\\Users\\\\Adarsh\\\\MyProject\\\\Deployed_Finals\\\\djangobackendaug2025\\\\whatsapp_latest_final-mainjunk\\\\whatsapp_latest_final_withclaude\\\\celery.log'' -Tail 100\")"
+      "Bash(powershell -Command \"Get-Content ''C:\\\\Users\\\\Adarsh\\\\MyProject\\\\Deployed_Finals\\\\djangobackendaug2025\\\\whatsapp_latest_final-mainjunk\\\\whatsapp_latest_final_withclaude\\\\celery.log'' -Tail 100\")",
+      "Bash(powershell -Command \"New-Item -ItemType Directory -Force -Path ''C:\\\\Users\\\\Adarsh\\\\MyProject\\\\Deployed_Finals\\\\djangobackendaug2025\\\\whatsapp_latest_final-mainjunk\\\\whatsapp_latest_final_withclaude\\\\interaction\\\\management\\\\commands''\")",
+      "Bash(pytest:*)",
+      "Bash(npm install)",
+      "Bash(npm test)",
+      "Bash(dir:*)"
     ]
   }
 }

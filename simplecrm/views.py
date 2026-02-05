@@ -10,12 +10,128 @@ from django.http import JsonResponse
 from django.db import connection, OperationalError
 
 def health_check(request):
+    """
+    Comprehensive health check endpoint.
+    Returns status of all critical components:
+    - Database connection
+    - Redis connection
+    - Celery workers
+    - Pending tasks queue
+    - Disk space
+    """
+    import shutil
+    from django.conf import settings
+
+    health_status = {
+        'status': 'healthy',
+        'components': {},
+        'timestamp': None
+    }
+
+    from django.utils import timezone
+    health_status['timestamp'] = timezone.now().isoformat()
+
+    overall_healthy = True
+
+    # 1. Check Database
     try:
-        # Check database connection
         connection.ensure_connection()
-        return JsonResponse({'status': 'Django Code is healthy'}, status=200)
-    except OperationalError:
-        return JsonResponse({'status': 'Django Code is unhealthy'}, status=500)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        health_status['components']['database'] = {'status': 'healthy', 'message': 'Connected'}
+    except Exception as e:
+        health_status['components']['database'] = {'status': 'unhealthy', 'message': str(e)}
+        overall_healthy = False
+
+    # 2. Check Redis
+    try:
+        import redis
+        r = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=3)
+        r.ping()
+        health_status['components']['redis'] = {'status': 'healthy', 'message': 'Connected'}
+    except Exception as e:
+        health_status['components']['redis'] = {'status': 'unhealthy', 'message': str(e)}
+        # Redis being down is not critical - we have fallback
+
+    # 3. Check Celery (via Redis)
+    try:
+        from simplecrm.celery import app as celery_app
+        inspect = celery_app.control.inspect(timeout=2)
+        active_workers = inspect.active()
+        if active_workers:
+            worker_count = len(active_workers)
+            health_status['components']['celery'] = {
+                'status': 'healthy',
+                'message': f'{worker_count} worker(s) active',
+                'workers': list(active_workers.keys())
+            }
+        else:
+            health_status['components']['celery'] = {
+                'status': 'degraded',
+                'message': 'No active workers (using sync fallback)'
+            }
+    except Exception as e:
+        health_status['components']['celery'] = {
+            'status': 'degraded',
+            'message': f'Cannot connect: {str(e)} (using sync fallback)'
+        }
+
+    # 4. Check Pending Tasks Queue
+    try:
+        from interaction.pending_tasks import get_pending_task_stats
+        pending_stats = get_pending_task_stats()
+        pending_count = pending_stats.get('pending', 0)
+        failed_count = pending_stats.get('failed', 0)
+
+        if failed_count > 100:
+            health_status['components']['pending_queue'] = {
+                'status': 'warning',
+                'message': f'{failed_count} failed tasks need attention',
+                'stats': pending_stats
+            }
+        else:
+            health_status['components']['pending_queue'] = {
+                'status': 'healthy',
+                'message': f'{pending_count} pending, {failed_count} failed',
+                'stats': pending_stats
+            }
+    except Exception as e:
+        health_status['components']['pending_queue'] = {
+            'status': 'unknown',
+            'message': f'Cannot check: {str(e)}'
+        }
+
+    # 5. Check Disk Space
+    try:
+        total, used, free = shutil.disk_usage("/")
+        free_gb = free // (2**30)
+        total_gb = total // (2**30)
+        used_percent = (used / total) * 100
+
+        if used_percent > 90:
+            health_status['components']['disk'] = {
+                'status': 'critical',
+                'message': f'{free_gb}GB free of {total_gb}GB ({used_percent:.1f}% used)'
+            }
+            overall_healthy = False
+        elif used_percent > 80:
+            health_status['components']['disk'] = {
+                'status': 'warning',
+                'message': f'{free_gb}GB free of {total_gb}GB ({used_percent:.1f}% used)'
+            }
+        else:
+            health_status['components']['disk'] = {
+                'status': 'healthy',
+                'message': f'{free_gb}GB free of {total_gb}GB ({used_percent:.1f}% used)'
+            }
+    except Exception as e:
+        health_status['components']['disk'] = {'status': 'unknown', 'message': str(e)}
+
+    # Set overall status
+    health_status['status'] = 'healthy' if overall_healthy else 'unhealthy'
+
+    status_code = 200 if overall_healthy else 503
+    return JsonResponse(health_status, status=status_code)
 
 
 @api_view(['POST'])

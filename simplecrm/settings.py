@@ -104,24 +104,37 @@ LOGGING = {
             'format': '{levelname} {asctime} {module} {message}',
             'style': '{',
         },
+        'detailed': {
+            'format': '{levelname} {asctime} {module} {funcName}:{lineno} {message}',
+            'style': '{',
+        },
     },
     'handlers': {
         'file': {
             'level': 'INFO',
-            'class': 'logging.FileHandler',
+            'class': 'logging.handlers.RotatingFileHandler',  # Rotating to prevent disk fill
             'filename': os.path.join(BASE_DIR, 'requests.log'),
             'formatter': 'verbose',
+            'maxBytes': 10 * 1024 * 1024,  # 10MB per file
+            'backupCount': 5,  # Keep 5 backup files
         },
         'celery_file': {
             'level': 'INFO',
-            'class': 'logging.FileHandler',
+            'class': 'logging.handlers.RotatingFileHandler',  # Rotating to prevent disk fill
             'filename': os.path.join(BASE_DIR, 'celery.log'),
+            'formatter': 'detailed',
+            'maxBytes': 10 * 1024 * 1024,  # 10MB per file
+            'backupCount': 5,  # Keep 5 backup files
+        },
+        'console': {
+            'level': 'WARNING',
+            'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
     },
     'loggers': {
         'django': {
-            'handlers': ['file'],
+            'handlers': ['file', 'console'],
             'level': 'INFO',
             'propagate': True,
         },
@@ -130,15 +143,20 @@ LOGGING = {
             'level': 'INFO',
             'propagate': True,
         },
-        'celery': { 
+        'celery': {
+            'handlers': ['celery_file', 'console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        'celery.task': {
             'handlers': ['celery_file'],
             'level': 'INFO',
             'propagate': True,
         },
-        'celery.task': { 
-            'handlers': ['celery_file'],
+        'simplecrm': {
+            'handlers': ['file', 'console'],
             'level': 'INFO',
-            'propagate': True,
+            'propagate': False,
         },
     },
 }
@@ -342,3 +360,23 @@ CELERY_TASK_ROUTES = {
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
 AZURE_STORAGE_CONTAINER = os.getenv('AZURE_STORAGE_CONTAINER', 'media')
 AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME', '')
+
+# ============================================================================
+# REST FRAMEWORK CONFIGURATION
+# ============================================================================
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_CLASSES': [
+        'simplecrm.throttling.TenantRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'burst': '60/min',
+        'sustained': '1000/day',
+        'anon_burst': '20/min',
+        'anon_sustained': '200/day',
+        'contacts': '120/min',
+        'webhook': '300/min',
+        'tenant': '500/min',
+        'conversation_save': '100/min',
+        'interview': '30/min',
+    }
+}

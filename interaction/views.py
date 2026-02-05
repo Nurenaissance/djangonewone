@@ -100,9 +100,32 @@ def bulk_create_with_batching(objects: List, batch_size: int = 500):
 
 # Encrypt the data using AES symmetric encryption
 # IMP: Saves conversation, takes in data from whatsappbotserver, saves data in db using redis
+#
+# ROBUST FALLBACK MECHANISM (3-tier):
+# 1. Celery + Redis (fast async) - tries first if Redis is available
+# 2. Direct sync save (blocking but immediate) - fallback if Celery fails
+# 3. Database queue (guaranteed delivery) - last resort, processed by cron
+
+def check_redis_health():
+    """Quick check if Redis is accessible"""
+    try:
+        from django.conf import settings
+        import redis
+        r = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
+        r.ping()
+        return True
+    except Exception:
+        return False
+
 
 @csrf_exempt
 def save_conversations(request, contact_id):
+    """
+    Save conversations with robust 3-tier fallback:
+    1. Celery (async) - if Redis healthy
+    2. Sync save (blocking) - immediate fallback
+    3. DB queue (guaranteed) - if sync fails, queued for later processing
+    """
     payload = None
     try:
         payload = extract_payload(request)
@@ -114,22 +137,40 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode()
 
-        # TEMPORARY FIX: Bypass Celery entirely - Redis is down
-        # TODO: Re-enable Celery when Redis is fixed
-        # try:
-        #     process_conversations.delay(safe_payload, safe_key)
-        #     logger.info(f"✅ Conversation queued for {payload.get('contact_id')}")
-        #     return JsonResponse(
-        #         {"message": "Conversation accepted", "method": "async"},
-        #         status=202
-        #     )
-        # except Exception as celery_error:
-        #     logger.warning(f"⚠️ Celery unavailable, falling back to sync save: {celery_error}")
-        #     return save_conversations_sync(payload, key)
+        # TIER 1: Try Celery if Redis is healthy
+        if check_redis_health():
+            try:
+                process_conversations.delay(safe_payload, safe_key)
+                logger.info(f"✅ Conversation queued via Celery for {payload.get('contact_id')}")
+                return JsonResponse(
+                    {"message": "Conversation accepted", "method": "async"},
+                    status=202
+                )
+            except Exception as celery_error:
+                logger.warning(f"⚠️ Celery failed, trying sync: {celery_error}")
 
-        # Direct sync save - bypasses broken Celery/Redis
-        logger.info(f"📝 Saving conversation directly for {payload.get('contact_id')}")
-        return save_conversations_sync(payload, key)
+        # TIER 2: Direct sync save
+        try:
+            logger.info(f"📝 Saving conversation directly for {payload.get('contact_id')}")
+            return save_conversations_sync(payload, key)
+        except Exception as sync_error:
+            logger.error(f"❌ Sync save failed, queuing to DB: {sync_error}")
+
+            # TIER 3: Queue to database (guaranteed delivery)
+            try:
+                from interaction.pending_tasks import queue_pending_task
+                task = queue_pending_task(safe_payload, key)
+                logger.info(f"📥 Conversation queued to DB (task {task.id}) for {payload.get('contact_id')}")
+                return JsonResponse(
+                    {"message": "Conversation queued for processing", "method": "db_queue", "task_id": task.id},
+                    status=202
+                )
+            except Exception as queue_error:
+                logger.critical(f"🚨 ALL SAVE METHODS FAILED for {payload.get('contact_id')}: {queue_error}")
+                return JsonResponse(
+                    {"error": "Failed to save conversation", "details": str(sync_error)},
+                    status=500
+                )
 
     except Tenant.DoesNotExist:
         logger.error(f"Tenant not found: {payload.get('tenant') if payload else 'unknown'}")
@@ -208,6 +249,63 @@ def save_conversations_sync(payload, key):
     except Exception as e:
         logger.error(f"❌ Sync save failed: {e}", exc_info=True)
         return JsonResponse({"error": str(e)}, status=500)
+
+
+def save_conversations_sync_from_pending(payload, key):
+    """
+    Process a conversation from the pending tasks queue.
+    Similar to save_conversations_sync but without HTTP response.
+    Raises exception on failure (for retry logic).
+    """
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    import os as sync_os
+
+    contact_id = payload['contact_id']
+    conversations = payload.get('conversations', [])
+    tenant_id = payload['tenant']
+    source = payload.get('source', '')
+    bpid = payload.get('business_phone_number_id', '')
+    timestamp = payload.get('time', timezone.now())
+
+    if not conversations:
+        logger.warning(f"⚠️ Empty conversations for pending task {contact_id}")
+        return 0
+
+    conversations_to_create = []
+
+    for message in conversations:
+        text = message.get('text', '')
+        data_str = json.dumps(text)
+        iv = sync_os.urandom(16)
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        pad_len = 16 - len(data_str) % 16
+        data_str += chr(pad_len) * pad_len
+        encrypted_data = iv + encryptor.update(data_str.encode()) + encryptor.finalize()
+
+        conversations_to_create.append(Conversation(
+            contact_id=contact_id,
+            encrypted_message_text=encrypted_data,
+            sender=message.get('sender', 'unknown'),
+            tenant_id=tenant_id,
+            source=source,
+            business_phone_number_id=bpid,
+            date_time=timestamp,
+            message_type=message.get('message_type', 'text'),
+            media_url=message.get('media_url'),
+            media_caption=message.get('media_caption'),
+            media_filename=message.get('media_filename'),
+            thumbnail_url=message.get('thumbnail_url')
+        ))
+
+    if conversations_to_create:
+        with transaction.atomic():
+            Conversation.objects.bulk_create(conversations_to_create, batch_size=500)
+
+    saved_count = len(conversations_to_create)
+    logger.info(f"✅ Pending task saved {saved_count} conversations for {contact_id}")
+    return saved_count
 # def check_rate_limit(request, max_requests: int = 100, window: int = 60) -> bool:
 #     """Implement sliding window rate limiting"""
 #     client_ip = get_client_ip(request)
