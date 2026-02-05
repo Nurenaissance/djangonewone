@@ -7,7 +7,10 @@
       "Bash(npm install)",
       "Bash(npm test)",
       "Bash(dir:*)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)",
+      "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test python:*)",
+      "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test pytest:*)"
     ]
   }
 }

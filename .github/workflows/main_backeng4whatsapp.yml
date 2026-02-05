@@ -39,11 +39,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify Django setup
+        env:
+          DJANGO_SETTINGS_MODULE: simplecrm.settings_test
+        run: |
+          python -c "import django; django.setup(); print('Django setup OK')"
+
       - name: Run tests
         env:
           DJANGO_SETTINGS_MODULE: simplecrm.settings_test
         run: |
-          pytest tests/ -v --tb=short -x
+          pytest tests/ -v --tb=long
         continue-on-error: false
 
   # ==========================================================================
