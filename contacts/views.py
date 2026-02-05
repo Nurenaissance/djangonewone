@@ -84,23 +84,11 @@ class ContactcustomfieldAPIView(ListCreateAPIView):
             # Check if a contact with the given phone number and tenant already exists
             existing_contact = None
             if 'phone' in contact_data:
-                try:
-                    # Filter by both phone and tenant
-                    existing_contact = Contact.objects.get(
-                        phone=contact_data['phone'],
-                        tenant=tenant_instance
-                    )
-                except Contact.DoesNotExist:
-                    # No existing contact found with this phone number in this tenant
-                    pass
-                except Contact.MultipleObjectsReturned:
-                    # Handle the case where multiple contacts have the same phone in the same tenant
-                    logger.warning(f"Multiple contacts found with phone {contact_data['phone']} in tenant {tenant_instance.id}")
-                    # Get the most recently updated one
-                    existing_contact = Contact.objects.filter(
-                        phone=contact_data['phone'],
-                        tenant=tenant_instance
-                    ).order_by('-createdOn').first()
+                # Use .first() to handle potential duplicates gracefully
+                existing_contact = Contact.objects.filter(
+                    phone=contact_data['phone'],
+                    tenant=tenant_instance
+                ).order_by('-createdOn').first()
             
             if existing_contact:
                 # Update existing contact with new data
@@ -236,7 +224,12 @@ class ContactByAccountAPIView(ListCreateAPIView):
         return Contact.objects.filter(account_id=account_id)  # Filter by 
     
 class ContactByPhoneAPIView(ListCreateAPIView):
+    """
+    GET contacts by phone number. POST is disabled to prevent duplicate creation.
+    Use /contacts_by_tenant/ for creating new contacts.
+    """
     serializer_class = ContactSerializer
+    http_method_names = ['get', 'head', 'options']  # Disable POST/PUT/PATCH/DELETE
 
     def get_queryset(self):
         phone = self.kwargs.get('phone')
@@ -296,10 +289,10 @@ class ContactByTenantAPIView(CreateAPIView):
             name = contact_data.get('name')
             phone = contact_data.get('phone')
 
-            contact_exists = Contact.objects.filter(tenant_id=tenant_id, phone=phone).exists()
+            # Use .first() to handle potential duplicates gracefully
+            contact = Contact.objects.filter(tenant_id=tenant_id, phone=phone).first()
 
-            if contact_exists:
-                contact = Contact.objects.get(tenant_id=tenant_id, phone=phone)
+            if contact:
                 if name:
                     contact.name = name
                     contact.save()

@@ -114,18 +114,22 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode()
 
-        # Try Celery first (async, faster response)
-        try:
-            process_conversations.delay(safe_payload, safe_key)
-            logger.info(f"✅ Conversation queued for {payload.get('contact_id')}")
-            return JsonResponse(
-                {"message": "Conversation accepted", "method": "async"},
-                status=202
-            )
-        except Exception as celery_error:
-            # Celery/Redis is down - fallback to synchronous save
-            logger.warning(f"⚠️ Celery unavailable, falling back to sync save: {celery_error}")
-            return save_conversations_sync(payload, key)
+        # TEMPORARY FIX: Bypass Celery entirely - Redis is down
+        # TODO: Re-enable Celery when Redis is fixed
+        # try:
+        #     process_conversations.delay(safe_payload, safe_key)
+        #     logger.info(f"✅ Conversation queued for {payload.get('contact_id')}")
+        #     return JsonResponse(
+        #         {"message": "Conversation accepted", "method": "async"},
+        #         status=202
+        #     )
+        # except Exception as celery_error:
+        #     logger.warning(f"⚠️ Celery unavailable, falling back to sync save: {celery_error}")
+        #     return save_conversations_sync(payload, key)
+
+        # Direct sync save - bypasses broken Celery/Redis
+        logger.info(f"📝 Saving conversation directly for {payload.get('contact_id')}")
+        return save_conversations_sync(payload, key)
 
     except Tenant.DoesNotExist:
         logger.error(f"Tenant not found: {payload.get('tenant') if payload else 'unknown'}")

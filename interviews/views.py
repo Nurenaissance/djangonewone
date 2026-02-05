@@ -26,15 +26,28 @@ class InterviewResponseListView(generics.ListAPIView):
 
     def get_queryset(self):
         tenant_id = self.request.headers.get('X-Tenant-Id') or self.request.headers.get('X-Tenant-ID')
-        flow_name = self.request.query_params.get('flow_name', 'interviewdrishtee')
 
         if not tenant_id:
             return InterviewResponse.objects.none()
 
+        # Base queryset filtered by tenant
         queryset = InterviewResponse.objects.filter(
-            tenant_id=tenant_id,
-            flow_name=flow_name
+            tenant_id=tenant_id
         ).select_related('tenant').order_by('-timestamp')
+
+        # Filter by flow_name OR interview_type (mutually exclusive tabs)
+        flow_name = self.request.query_params.get('flow_name')
+        interview_type = self.request.query_params.get('interview_type')
+
+        if flow_name:
+            queryset = queryset.filter(flow_name=flow_name)
+        elif interview_type:
+            # Support comma-separated values: ?interview_type=vidushi,maan_vidushi
+            interview_types = interview_type.split(',')
+            queryset = queryset.filter(interview_type__in=interview_types)
+        else:
+            # Default to interviewdrishtee if neither specified
+            queryset = queryset.filter(flow_name='interviewdrishtee')
 
         # Optional filtering by phone number
         phone_no = self.request.query_params.get('phone_no')
@@ -221,10 +234,19 @@ def interview_stats(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    flow_name = request.query_params.get('flow_name', 'interviewdrishtee')
+    # Filter by flow_name OR interview_type
+    flow_name = request.query_params.get('flow_name')
+    interview_type = request.query_params.get('interview_type')
 
-    # Cache key for this tenant's stats
-    cache_key = f"interview_stats_{tenant_id}_{flow_name}"
+    # Create cache key based on filter type
+    if interview_type:
+        cache_key = f"interview_stats_{tenant_id}_interview_type_{interview_type}"
+    elif flow_name:
+        cache_key = f"interview_stats_{tenant_id}_{flow_name}"
+    else:
+        # Default to interviewdrishtee
+        flow_name = 'interviewdrishtee'
+        cache_key = f"interview_stats_{tenant_id}_{flow_name}"
 
     # Try to get from cache first (5 minute TTL)
     cached_stats = cache.get(cache_key)
@@ -233,11 +255,15 @@ def interview_stats(request):
         return Response(cached_stats)
 
     try:
-        # Use select_related sparingly and limit query complexity
-        base_qs = InterviewResponse.objects.filter(
-            tenant_id=tenant_id,
-            flow_name=flow_name
-        )
+        # Base filter by tenant
+        base_qs = InterviewResponse.objects.filter(tenant_id=tenant_id)
+
+        # Apply flow_name or interview_type filter
+        if flow_name:
+            base_qs = base_qs.filter(flow_name=flow_name)
+        elif interview_type:
+            interview_types = interview_type.split(',')
+            base_qs = base_qs.filter(interview_type__in=interview_types)
 
         # Get counts efficiently in single aggregation query
         stats_aggregate = base_qs.aggregate(
@@ -588,14 +614,15 @@ def import_from_direct_chat(request):
                     skipped_count += 1
                     continue
 
-                # Map audio to questions (sequential: name_audio, address_audio, calibration, q1, q2, q3, q4)
-                name_audio = audio_urls[0] if len(audio_urls) > 0 else ''
-                address_audio = audio_urls[1] if len(audio_urls) > 1 else ''
-                calibration_audio = audio_urls[2] if len(audio_urls) > 2 else ''
-                question1 = audio_urls[3] if len(audio_urls) > 3 else ''
-                question2 = audio_urls[4] if len(audio_urls) > 4 else ''
-                question3 = audio_urls[5] if len(audio_urls) > 5 else ''
-                question4 = audio_urls[6] if len(audio_urls) > 6 else ''
+                # Map audio to questions (NEW AUTOMATION: calibration, q1, q2, q3, q4)
+                # Name and address questions removed from automation
+                name_audio = ''  # No longer captured
+                address_audio = ''  # No longer captured
+                calibration_audio = audio_urls[0] if len(audio_urls) > 0 else ''
+                question1 = audio_urls[1] if len(audio_urls) > 1 else ''
+                question2 = audio_urls[2] if len(audio_urls) > 2 else ''
+                question3 = audio_urls[3] if len(audio_urls) > 3 else ''
+                question4 = audio_urls[4] if len(audio_urls) > 4 else ''
 
                 # Get candidate name from Contact (primary source)
                 candidate_name = contact_names.get(phone, '')
@@ -730,6 +757,19 @@ def public_interview_submit(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Hardcode tenant for all public interview submissions
+        try:
+            tenant = Tenant.objects.get(tenant_id='ehgymjv')
+        except Tenant.DoesNotExist:
+            logger.error("Tenant 'ehgymjv' not found in database")
+            return Response(
+                {
+                    "success": False,
+                    "error": "System configuration error. Please contact support."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
         # Get audio files from request
         calibration_audio_file = request.FILES.get('calibration_audio')
         part1_audio_file = request.FILES.get('part1_audio')
@@ -797,7 +837,7 @@ def public_interview_submit(request):
         submission_ip = request.data.get('submission_ip') or request.META.get('REMOTE_ADDR')
         user_agent = request.data.get('user_agent') or request.META.get('HTTP_USER_AGENT')
 
-        # Create InterviewResponse record (without tenant for public submissions)
+        # Create InterviewResponse record (associated with hardcoded tenant)
         interview_response = InterviewResponse.objects.create(
             phone_no=phone_number,
             candidate_name=candidate_name,
@@ -809,7 +849,7 @@ def public_interview_submit(request):
             status='completed',
             submission_ip=submission_ip,
             user_agent=user_agent,
-            tenant=None  # Public submissions have no tenant
+            tenant=tenant  # Changed from tenant=None - now uses hardcoded 'ehgymjv' tenant
         )
 
         logger.info(
