@@ -6,7 +6,8 @@ from .views import (
     save_interview_from_flow,
     interview_stats,
     import_from_direct_chat,
-    public_interview_submit
+    public_interview_submit,
+    dashboard_tabs,
 )
 
 urlpatterns = [
@@ -27,6 +28,9 @@ urlpatterns = [
 
     # Import from Direct Chat
     path('import-from-chat/', import_from_direct_chat, name='import-from-direct-chat'),
+
+    # Dashboard tabs (tab config with counts)
+    path('dashboard/tabs/', dashboard_tabs, name='dashboard-tabs'),
 
     # ========== PUBLIC ENDPOINTS (No authentication required) ==========
     # Public interview submission page

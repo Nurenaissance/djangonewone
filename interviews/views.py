@@ -15,6 +15,53 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# TAB DEFINITIONS — single source of truth for dashboard tabs
+# ============================================================================
+TAB_DEFINITIONS = {
+    'whatsapp': {
+        'label': 'WhatsApp Interviews',
+        'description': 'Interviews imported from WhatsApp conversations',
+        'filter': {'flow_name': 'interviewdrishtee'},
+    },
+    'vidushi': {
+        'label': 'Vidushi',
+        'description': 'Vidushi interviews submitted via public form',
+        'filter': {'flow_name': 'naad_2.0_interview', 'interview_type': 'vidushi'},
+    },
+    'maan_vidushi': {
+        'label': 'Maan Vidushi',
+        'description': 'Maan Vidushi interviews submitted via public form',
+        'filter': {'flow_name': 'naad_2.0_interview', 'interview_type': 'maan_vidushi'},
+    },
+}
+
+
+def apply_tab_filter(queryset, request):
+    """
+    Apply tab-based filtering to a queryset.
+    Priority: ?tab= > ?flow_name= / ?interview_type= > default (whatsapp tab)
+    Returns (filtered_queryset, cache_key_suffix).
+    """
+    tab = request.query_params.get('tab')
+    if tab and tab in TAB_DEFINITIONS:
+        filters = TAB_DEFINITIONS[tab]['filter']
+        return queryset.filter(**filters), f"tab_{tab}"
+
+    # Legacy: explicit flow_name / interview_type params
+    flow_name = request.query_params.get('flow_name')
+    interview_type = request.query_params.get('interview_type')
+
+    if flow_name:
+        return queryset.filter(flow_name=flow_name), f"flow_{flow_name}"
+    if interview_type:
+        interview_types = interview_type.split(',')
+        return queryset.filter(interview_type__in=interview_types), f"itype_{'_'.join(interview_types)}"
+
+    # Default: WhatsApp tab
+    filters = TAB_DEFINITIONS['whatsapp']['filter']
+    return queryset.filter(**filters), "tab_whatsapp"
+
 
 class InterviewResponseListView(generics.ListAPIView):
     """
@@ -35,19 +82,8 @@ class InterviewResponseListView(generics.ListAPIView):
             tenant_id=tenant_id
         ).select_related('tenant').order_by('-timestamp')
 
-        # Filter by flow_name OR interview_type (mutually exclusive tabs)
-        flow_name = self.request.query_params.get('flow_name')
-        interview_type = self.request.query_params.get('interview_type')
-
-        if flow_name:
-            queryset = queryset.filter(flow_name=flow_name)
-        elif interview_type:
-            # Support comma-separated values: ?interview_type=vidushi,maan_vidushi
-            interview_types = interview_type.split(',')
-            queryset = queryset.filter(interview_type__in=interview_types)
-        else:
-            # Default to interviewdrishtee if neither specified
-            queryset = queryset.filter(flow_name='interviewdrishtee')
+        # Apply tab/flow/interview_type filter
+        queryset, _ = apply_tab_filter(queryset, self.request)
 
         # Optional filtering by phone number
         phone_no = self.request.query_params.get('phone_no')
@@ -234,19 +270,12 @@ def interview_stats(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # Filter by flow_name OR interview_type
-    flow_name = request.query_params.get('flow_name')
-    interview_type = request.query_params.get('interview_type')
+    # Base filter by tenant
+    base_qs = InterviewResponse.objects.filter(tenant_id=tenant_id)
 
-    # Create cache key based on filter type
-    if interview_type:
-        cache_key = f"interview_stats_{tenant_id}_interview_type_{interview_type}"
-    elif flow_name:
-        cache_key = f"interview_stats_{tenant_id}_{flow_name}"
-    else:
-        # Default to interviewdrishtee
-        flow_name = 'interviewdrishtee'
-        cache_key = f"interview_stats_{tenant_id}_{flow_name}"
+    # Apply tab/flow/interview_type filter and get cache key suffix
+    base_qs, cache_suffix = apply_tab_filter(base_qs, request)
+    cache_key = f"interview_stats_{tenant_id}_{cache_suffix}"
 
     # Try to get from cache first (5 minute TTL)
     cached_stats = cache.get(cache_key)
@@ -255,15 +284,6 @@ def interview_stats(request):
         return Response(cached_stats)
 
     try:
-        # Base filter by tenant
-        base_qs = InterviewResponse.objects.filter(tenant_id=tenant_id)
-
-        # Apply flow_name or interview_type filter
-        if flow_name:
-            base_qs = base_qs.filter(flow_name=flow_name)
-        elif interview_type:
-            interview_types = interview_type.split(',')
-            base_qs = base_qs.filter(interview_type__in=interview_types)
 
         # Get counts efficiently in single aggregation query
         stats_aggregate = base_qs.aggregate(
@@ -306,6 +326,45 @@ def interview_stats(request):
             "unique_numbers": 0,
             "error": "Stats temporarily unavailable"
         }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dashboard_tabs(request):
+    """
+    GET /interviews/dashboard/tabs/
+    Returns tab configuration with counts for the interview dashboard.
+    Defaults tenant to 'ehgymjv' if X-Tenant-Id header not provided.
+    """
+    from django.core.cache import cache
+    from django.db.models import Count
+
+    tenant_id = (
+        request.headers.get('X-Tenant-Id')
+        or request.headers.get('X-Tenant-ID')
+        or 'ehgymjv'
+    )
+
+    cache_key = f"dashboard_tabs_{tenant_id}"
+    cached = cache.get(cache_key)
+    if cached:
+        return Response(cached)
+
+    tabs = []
+    for key, defn in TAB_DEFINITIONS.items():
+        count = InterviewResponse.objects.filter(
+            tenant_id=tenant_id, **defn['filter']
+        ).count()
+        tabs.append({
+            'key': key,
+            'label': defn['label'],
+            'description': defn['description'],
+            'count': count,
+        })
+
+    data = {'tabs': tabs, 'default_tab': 'whatsapp'}
+    cache.set(cache_key, data, 300)  # 5 min TTL
+    return Response(data)
 
 
 # Helper functions for import
@@ -856,6 +915,12 @@ def public_interview_submit(request):
             f"Public interview submitted successfully: "
             f"phone={phone_number}, name={candidate_name}, type={interview_type}, id={interview_response.id}"
         )
+
+        # Invalidate dashboard caches so new submission appears immediately
+        from django.core.cache import cache
+        tab_key = 'vidushi' if interview_type == 'vidushi' else 'maan_vidushi'
+        cache.delete(f"interview_stats_ehgymjv_tab_{tab_key}")
+        cache.delete("dashboard_tabs_ehgymjv")
 
         # Return success response
         return Response(

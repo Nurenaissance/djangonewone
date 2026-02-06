@@ -13,6 +13,10 @@ class InterviewResponseSerializer(serializers.ModelSerializer):
     has_address_audio = serializers.SerializerMethodField(help_text="Whether address was recorded as audio")
     questions_answered = serializers.SerializerMethodField(help_text="Number of interview questions answered")
     display_name = serializers.SerializerMethodField(help_text="Best available name for display")
+    interview_type_display = serializers.SerializerMethodField(help_text="Human-readable interview type")
+    audio_count = serializers.SerializerMethodField(help_text="Number of audio files uploaded")
+    has_part1_audio = serializers.SerializerMethodField(help_text="Whether Part 1 audio exists")
+    has_part2_audio = serializers.SerializerMethodField(help_text="Whether Part 2 audio exists")
 
     class Meta:
         model = InterviewResponse
@@ -21,6 +25,7 @@ class InterviewResponseSerializer(serializers.ModelSerializer):
             'phone_no',
             'tenant',
             'flow_name',
+            'interview_type',
             'timestamp',
             'candidate_name',
             'name',
@@ -29,11 +34,15 @@ class InterviewResponseSerializer(serializers.ModelSerializer):
             'address_audio',
             'calibration',
             'calibration_audio',
+            'part1_audio',
+            'part2_audio',
             'status',
             'question1',
             'question2',
             'question3',
             'question4',
+            'submission_ip',
+            'user_agent',
             'created_at',
             'updated_at',
             # User-friendly fields for dashboard
@@ -43,6 +52,10 @@ class InterviewResponseSerializer(serializers.ModelSerializer):
             'has_address_audio',
             'questions_answered',
             'display_name',
+            'interview_type_display',
+            'audio_count',
+            'has_part1_audio',
+            'has_part2_audio',
         ]
         read_only_fields = ['id', 'timestamp', 'created_at', 'updated_at']
 
@@ -85,6 +98,22 @@ class InterviewResponseSerializer(serializers.ModelSerializer):
             return f"[Audio - {obj.phone_no}]"
         return obj.phone_no
 
+    def get_interview_type_display(self, obj):
+        """Return human-readable interview type"""
+        return obj.get_interview_type_display()
+
+    def get_audio_count(self, obj):
+        """Return count of uploaded audio files"""
+        return obj.get_audio_count()
+
+    def get_has_part1_audio(self, obj):
+        """Check if Part 1 audio exists"""
+        return bool(obj.part1_audio)
+
+    def get_has_part2_audio(self, obj):
+        """Check if Part 2 audio exists"""
+        return bool(obj.part2_audio)
+
 
 class InterviewResponseCreateSerializer(serializers.ModelSerializer):
     """
@@ -96,6 +125,7 @@ class InterviewResponseCreateSerializer(serializers.ModelSerializer):
             'phone_no',
             'tenant',
             'flow_name',
+            'interview_type',
             'candidate_name',
             'name',
             'name_audio',
@@ -103,11 +133,15 @@ class InterviewResponseCreateSerializer(serializers.ModelSerializer):
             'address_audio',
             'calibration',
             'calibration_audio',
+            'part1_audio',
+            'part2_audio',
             'status',
             'question1',
             'question2',
             'question3',
-            'question4'
+            'question4',
+            'submission_ip',
+            'user_agent',
         ]
 
     def validate_phone_no(self, value):
