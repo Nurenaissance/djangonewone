@@ -2,7 +2,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
-from django.db.models import Q
+from django.db.models import Q, Max
 from .models import InterviewResponse
 from .serializers import InterviewResponseSerializer, InterviewResponseCreateSerializer
 from tenant.models import Tenant
@@ -56,7 +56,12 @@ def apply_tab_filter(queryset, request):
         return queryset.filter(flow_name=flow_name), f"flow_{flow_name}"
     if interview_type:
         interview_types = interview_type.split(',')
-        return queryset.filter(interview_type__in=interview_types), f"itype_{'_'.join(interview_types)}"
+        # Also filter by flow_name to exclude WhatsApp imports that have
+        # interview_type='vidushi' as the model default
+        return queryset.filter(
+            interview_type__in=interview_types,
+            flow_name='naad_2.0_interview'
+        ), f"itype_{'_'.join(interview_types)}"
 
     # Default: WhatsApp tab
     filters = TAB_DEFINITIONS['whatsapp']['filter']
@@ -80,7 +85,7 @@ class InterviewResponseListView(generics.ListAPIView):
         # Base queryset filtered by tenant
         queryset = InterviewResponse.objects.filter(
             tenant_id=tenant_id
-        ).select_related('tenant').order_by('-timestamp')
+        ).select_related('tenant')
 
         # Apply tab/flow/interview_type filter
         queryset, _ = apply_tab_filter(queryset, self.request)
@@ -95,7 +100,17 @@ class InterviewResponseListView(generics.ListAPIView):
         if status_filter:
             queryset = queryset.filter(status=status_filter)
 
-        return queryset
+        # Deduplicate: show only the latest entry per phone number
+        # (the import creates multiple session entries per phone)
+        # Use ?all_sessions=true to see every session entry
+        show_all = self.request.query_params.get('all_sessions', 'false').lower() == 'true'
+        if not show_all:
+            latest_ids = queryset.values('phone_no').annotate(
+                latest_id=Max('id')
+            ).values_list('latest_id', flat=True)
+            queryset = queryset.filter(id__in=latest_ids)
+
+        return queryset.order_by('-timestamp')
 
 
 class InterviewResponseCreateView(generics.CreateAPIView):
@@ -295,17 +310,21 @@ def interview_stats(request):
         unique_imported_numbers = stats_aggregate['unique_phones'] or 0
 
         # Status breakdown using efficient aggregation
-        status_counts_qs = base_qs.values('status').annotate(count=Count('id'))
+        # Deduplicated: count unique phones per status (not total rows)
+        status_counts_qs = base_qs.values('status').annotate(count=Count('phone_no', distinct=True))
         status_counts = {item['status']: item['count'] for item in status_counts_qs}
 
         stats_data = {
-            # Core interview stats (fast)
-            "total_interviews": total_imported_sessions,
+            # Core interview stats — unique candidates (deduplicated)
+            "total_interviews": unique_imported_numbers,
             "unique_candidates": unique_imported_numbers,
             "status_breakdown": status_counts,
 
+            # Raw session count for reference
+            "total_sessions": total_imported_sessions,
+
             # Legacy fields for backward compatibility
-            "total_responses": total_imported_sessions,
+            "total_responses": unique_imported_numbers,
             "unique_numbers": unique_imported_numbers,
         }
 
@@ -352,9 +371,10 @@ def dashboard_tabs(request):
 
     tabs = []
     for key, defn in TAB_DEFINITIONS.items():
+        # Count unique phone numbers (not total rows) to match deduplicated list view
         count = InterviewResponse.objects.filter(
             tenant_id=tenant_id, **defn['filter']
-        ).count()
+        ).values('phone_no').distinct().count()
         tabs.append({
             'key': key,
             'label': defn['label'],
@@ -720,8 +740,13 @@ def import_from_direct_chat(request):
         unique_contacts = len(phone_conversations)
 
         # Get updated counts
-        total_interviews = InterviewResponse.objects.filter(tenant=tenant, flow_name='interviewdrishtee').count()
+        total_sessions = InterviewResponse.objects.filter(tenant=tenant, flow_name='interviewdrishtee').count()
         unique_numbers = InterviewResponse.objects.filter(tenant=tenant, flow_name='interviewdrishtee').values('phone_no').distinct().count()
+
+        # Invalidate caches so dashboard reflects new data immediately
+        from django.core.cache import cache
+        cache.delete(f"interview_stats_{tenant_id}_tab_whatsapp")
+        cache.delete(f"dashboard_tabs_{tenant_id}")
 
         message = f"Refresh complete! Added {imported_count} new sessions."
         if force_reimport:
@@ -733,7 +758,8 @@ def import_from_direct_chat(request):
             "imported_count": imported_count,
             "skipped_count": skipped_count,
             "deleted_count": deleted_count,
-            "total_interviews": total_interviews,
+            "total_interviews": unique_numbers,
+            "total_sessions": total_sessions,
             "unique_candidates": unique_numbers,
             "unique_contacts_in_chat": unique_contacts,
         })

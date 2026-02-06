@@ -10,9 +10,14 @@ from rest_framework.decorators import api_view
 from django.shortcuts import get_object_or_404
 
 # Define the OpenAI sentiment analysis function
-# Set up your OpenAI API key
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Set up your OpenAI API key lazily to avoid import-time errors in test/CI
+_client = None
+
+def _get_openai_client():
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _client
 
 def analyze_sentiment(text):
     """Analyze sentiment of the given text using OpenAI GPT."""
@@ -56,7 +61,7 @@ def analyze_sentiment(text):
             """
 
             # Call the OpenAI API for sentiment analysis
-            response = client.chat.completions.create(
+            response = _get_openai_client().chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": sentiment_prompt}]
             )

@@ -19,14 +19,19 @@ logger = logging.getLogger(__name__)
 # node['data']['condition']
 
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+_openai_client = None
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _openai_client
 
 
 def get_translation(languages, text):
     MODIFIED_PROMPT = f"Text: {text}, Language: {languages}"
 
-    response = client.chat.completions.create(
+    response = _get_openai_client().chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an helpful assisstant who is pro at translating Indian Languages. Translate the text provided in english into the languages provided and return only the translated text in Json format for diff languages as language codes."},

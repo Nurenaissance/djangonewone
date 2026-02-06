@@ -48,6 +48,7 @@ jobs:
       - name: Run tests
         env:
           DJANGO_SETTINGS_MODULE: simplecrm.settings_test
+          OPENAI_API_KEY: test-dummy-key-not-for-production
         run: |
           pytest tests/ -v --tb=long
         continue-on-error: false

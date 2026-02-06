@@ -15,8 +15,14 @@ from analytics.models import userData, FAISSIndex
 from psycopg2 import sql
 from .tables import get_db_connection
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize OpenAI client lazily to avoid import-time errors in test/CI
+_client = None
+
+def get_openai_client():
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _client
 
 # Database connection string
 DB_CONNECTION_STRING = 'postgresql://nurenai:Biz1nurenWar*@nurenaistore.postgres.database.azure.com:5432/nurenpostgres'
@@ -70,7 +76,7 @@ def get_embeddings(chunks):
     embeddings = []
     try:
         for chunk in chunks:
-            response = client.embeddings.create(input=chunk, model="text-embedding-3-small")
+            response = get_openai_client().embeddings.create(input=chunk, model="text-embedding-3-small")
             embeddings.append(response.data[0].embedding)
             print("chunk processed")
         print("Successfully created embeddings out of chunks")
@@ -154,7 +160,7 @@ def process_chunks(chunks):
 def get_query_embedding(query):
     """Get embedding for query text"""
     try:
-        response = client.embeddings.create(
+        response = get_openai_client().embeddings.create(
             input=query,
             model="text-embedding-ada-002"
         )
@@ -222,7 +228,7 @@ async def get_relevant_node_id(query_string, nodes):
     """Helper function for the first OpenAI API call"""
     try:
         response = await asyncio.to_thread(
-            client.chat.completions.create,
+            get_openai_client().chat.completions.create,
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are an intelligent assistant. You will receive a user query and a list of nodes. Each node contains an `id` and a `description` of text. Your task is to determine whether any node contains relevant information that directly answers the user's query. If one does, return ONLY the `id` of the most relevant node. If none of the nodes contain relevant information, return -1. IMPORTANT: Only return the raw id (like 4 or -1). Do not include any explanation, markdown, or quotes"},
@@ -238,7 +244,7 @@ async def get_openai_response(query_string, combined_query, userJSON_serialized,
     """Helper function for the second OpenAI API call"""
     try:
         response = await asyncio.to_thread(
-            client.chat.completions.create,
+            get_openai_client().chat.completions.create,
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": prompt},
@@ -556,7 +562,7 @@ def handle_media_uploads(request):
             print("CONTENT: ", content)
             
             try:
-                response = client.chat.completions.create(
+                response = get_openai_client().chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
                         {
@@ -601,7 +607,7 @@ def get_embedding(text, model="text-embedding-ada-002"):
     """Get embedding for text"""
     try:
         text = text.replace("\n", " ")
-        return client.embeddings.create(input=[text], model=model).data[0].embedding
+        return get_openai_client().embeddings.create(input=[text], model=model).data[0].embedding
     except Exception as e:
         print(f"Error getting embedding: {e}")
         return None
@@ -636,7 +642,7 @@ def find_similar_embeddings(query_embedding, threshold=0.5):
 def make_openai_call_(combined_query, query_text):
     """Make OpenAI API call for query processing"""
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant. You are a specialized assistant tasked with analyzing a set of similar documents. You are an expert assistant specialized in analyzing documents. Your task is to carefully read the provided document and extract the information that best answers the given query. If relevant information is found, include the file path in your response. If no relevant information is found, do not mention the file name or path"},

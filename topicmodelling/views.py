@@ -11,9 +11,14 @@ from openai import OpenAI
 from django.views.decorators.csrf import csrf_exempt
 from django.db import IntegrityError
 
-# Set up your OpenAI API key
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Set up your OpenAI API key lazily to avoid import-time errors in test/CI
+_client = None
+
+def _get_openai_client():
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _client
 
 # Download necessary NLTK data
 '''nltk.download('stopwords')
@@ -53,7 +58,7 @@ def perform_topic_modeling(preprocessed_text):
             If the messages do not contain distinct topics, respond with 'No topics'."""
             
             # Call OpenAI API
-            response = client.chat.completions.create(
+            response = _get_openai_client().chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": topic_prompt}],
                 max_tokens=100 
@@ -82,7 +87,7 @@ def perform_topic_modeling(preprocessed_text):
         Please provide a list of unique categories without including any specific topics or explanations. Format your response as a simple list, one category per line."""
         
         # Call OpenAI API for categorization
-        categorization_response = client.chat.completions.create(
+        categorization_response = _get_openai_client().chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": categorization_prompt}],
             max_tokens=100
@@ -177,7 +182,7 @@ class TopicModellingView(View):
             """
 
             # Call OpenAI API with GPT-4 model
-            response = client.chat.completions.create(
+            response = _get_openai_client().chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": topic_prompt}],
                 max_tokens=100  # Adjust max_tokens as needed

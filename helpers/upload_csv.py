@@ -21,8 +21,13 @@ logger = logging.getLogger(__name__)
 # Assuming df is your DataFrame
 default_timestamp = '1970-01-01 00:00:00'
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+_openai_client = None
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _openai_client
 
 def get_tableFields(table_name):
     query = f"SELECT * FROM {table_name} LIMIT 0"  # Use LIMIT 0 to avoid fetching actual data
@@ -65,7 +70,7 @@ def mappingFunc(list1, list2):
     list2_filtered = [item for item in list2 if item.lower() != 'id']
 
     try:
-        response = client.chat.completions.create(
+        response = _get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "developer", "content": SYSTEM_PROMPT},
