@@ -374,6 +374,376 @@ def query(request):
     except Exception as e:
         return JsonResponse({"data": {"status": 500, "message": f"Async execution error: {str(e)}"}}, status=500)
 
+###############################################################################
+# AI AGENT MODE — tool-calling endpoint for WhatsApp MCP integration
+###############################################################################
+import requests as http_requests
+import time as _time
+import logging as _logging
+
+_agent_logger = _logging.getLogger("agent_query")
+
+FASTAPI_URL = os.getenv(
+    "FASTAPI_URL",
+    "https://fastapione-gue2c5ecc9c4b8hy.centralindia-01.azurewebsites.net",
+)
+
+
+def fetch_mcp_tools_for_tenant(tenant_id):
+    """Fetch active MCP tool definitions from FastAPI for a given tenant."""
+    try:
+        resp = http_requests.get(
+            f"{FASTAPI_URL}/mcp-tools/tenant/{tenant_id}",
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("tools", [])
+        _agent_logger.warning("MCP tools fetch returned %s", resp.status_code)
+        return []
+    except Exception as exc:
+        _agent_logger.warning("Failed to fetch MCP tools: %s", exc)
+        return []
+
+
+def convert_tool_to_openai_function(tool):
+    """Convert one MCP tool definition dict → OpenAI function-calling format."""
+    parameters = tool.get("parameters") or {
+        "type": "object",
+        "properties": {},
+    }
+    # Ensure parameters has required JSON-Schema fields
+    if "type" not in parameters:
+        parameters["type"] = "object"
+    if "properties" not in parameters:
+        parameters["properties"] = {}
+
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": parameters,
+        },
+    }
+
+
+def execute_mcp_tool(tool_def, arguments):
+    """
+    Execute an MCP tool by making an HTTP request.
+
+    Returns (success: bool, data: any, error: str|None, duration_ms: int)
+    """
+    start = _time.time()
+    try:
+        url = tool_def.get("endpoint_url", "")
+        method = (tool_def.get("http_method") or "GET").upper()
+
+        # Interpolate ${var} placeholders in URL
+        for key, value in (arguments or {}).items():
+            url = url.replace(f"${{{key}}}", str(value))
+
+        # Build headers
+        headers = dict(tool_def.get("headers") or {})
+        auth_type = tool_def.get("auth_type", "none")
+        auth_config = tool_def.get("auth_config") or {}
+
+        if auth_type == "bearer":
+            headers["Authorization"] = f"Bearer {auth_config.get('token', '')}"
+        elif auth_type == "api_key":
+            header_name = auth_config.get("header", "X-API-Key")
+            headers[header_name] = auth_config.get("key", "")
+        elif auth_type == "basic":
+            import base64
+            creds = base64.b64encode(
+                f"{auth_config.get('username', '')}:{auth_config.get('password', '')}".encode()
+            ).decode()
+            headers["Authorization"] = f"Basic {creds}"
+
+        timeout = tool_def.get("timeout_seconds", 10)
+
+        # Make request
+        if method == "GET":
+            resp = http_requests.get(url, headers=headers, params=arguments, timeout=timeout)
+        elif method == "POST":
+            body = arguments
+            if tool_def.get("request_body_template"):
+                try:
+                    import re as _re
+                    tpl = tool_def["request_body_template"]
+                    for k, v in (arguments or {}).items():
+                        tpl = tpl.replace(f"{{{{{k}}}}}", str(v))
+                    tpl = _re.sub(r'\{\{[^}]+\}\}', '', tpl).strip()
+                    body = json.loads(tpl)
+                except Exception:
+                    body = arguments
+            resp = http_requests.post(url, headers=headers, json=body, timeout=timeout)
+        elif method == "PUT":
+            resp = http_requests.put(url, headers=headers, json=arguments, timeout=timeout)
+        elif method == "DELETE":
+            resp = http_requests.delete(url, headers=headers, timeout=timeout)
+        else:
+            resp = http_requests.request(method, url, headers=headers, json=arguments, timeout=timeout)
+
+        duration_ms = int((_time.time() - start) * 1000)
+
+        # Parse response
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"text": resp.text[:2000]}
+
+        return resp.ok, data, None, duration_ms
+
+    except http_requests.exceptions.Timeout:
+        duration_ms = int((_time.time() - start) * 1000)
+        return False, None, "Request timed out", duration_ms
+    except Exception as exc:
+        duration_ms = int((_time.time() - start) * 1000)
+        return False, None, str(exc), duration_ms
+
+
+def log_tool_execution(tenant_id, tool_id, phone, message, trigger_type,
+                       params, url, response_data, response_msg, status,
+                       error, duration_ms):
+    """Fire-and-forget log to FastAPI execution endpoint."""
+    try:
+        http_requests.post(
+            f"{FASTAPI_URL}/mcp-tools/executions",
+            json={
+                "tool_id": tool_id,
+                "tenant_id": tenant_id,
+                "contact_phone": phone or "",
+                "message_text": message,
+                "trigger_type": trigger_type,
+                "request_params": params,
+                "request_url": url,
+                "response_data": response_data,
+                "response_message": response_msg,
+                "status": status,
+                "error_message": error,
+                "duration_ms": duration_ms,
+                "from_cache": False,
+            },
+            timeout=3,
+        )
+    except Exception:
+        pass  # fire-and-forget
+
+
+def build_agent_system_prompt(tenant_id, rag_context, language, custom_prompt):
+    """Build the system prompt for the AI agent."""
+    # Try to get org name
+    org_name = "the brand"
+    try:
+        from tenant.models import Tenant
+        tenant = Tenant.objects.filter(id=tenant_id).first()
+        if tenant and tenant.organization:
+            org_name = tenant.organization
+    except Exception:
+        pass
+
+    if custom_prompt:
+        # Fill placeholders in custom prompt
+        prompt = custom_prompt
+        prompt = prompt.replace("{rag_context}", rag_context or "")
+        prompt = prompt.replace("{language}", language or "English")
+        prompt = prompt.replace("{organization}", org_name)
+        return prompt
+
+    return f"""You are a helpful AI assistant for {org_name}. You help customers via WhatsApp.
+
+KNOWLEDGE BASE:
+{rag_context or "No knowledge base content available."}
+
+INSTRUCTIONS:
+- Answer customer questions using the knowledge base above when possible.
+- When the customer needs an ACTION (check order, book appointment, etc.), use the available tools.
+- If a tool requires parameters the customer hasn't provided, ASK for them before calling the tool.
+- You may call MULTIPLE tools in one turn if the customer asks for several things.
+- After a tool returns data, summarize the result in a natural, friendly message. Do NOT dump raw JSON.
+- If no tool matches and the knowledge base doesn't cover the question, politely say you don't have that information.
+- Respond in {language or "English"}.
+- Keep your response under 1000 characters (WhatsApp message limit).
+- Do NOT use markdown formatting — WhatsApp does not render it.
+- Be concise, friendly, and professional."""
+
+
+@csrf_exempt
+def agent_query(request):
+    """
+    AI Agent endpoint — uses OpenAI tool-calling loop with RAG context
+    and MCP tools.  POST /agent-query/
+    """
+    if request.method != "POST":
+        return JsonResponse({"status": 405, "message": "Method not allowed"}, status=405)
+
+    try:
+        tenant_id = request.headers.get("X-Tenant-Id")
+        if not tenant_id:
+            return JsonResponse({"status": 400, "message": "Tenant ID is required."}, status=400)
+
+        req_body = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"status": 400, "message": "Invalid JSON body."}, status=400)
+
+    query_string = req_body.get("query", "")
+    phone = req_body.get("phone")
+    nodes = req_body.get("nodes", [])
+    language = req_body.get("language", "English")
+    use_tools = req_body.get("use_tools", True)
+    conversation_history = req_body.get("conversation_history", [])
+    custom_agent_prompt = req_body.get("agent_system_prompt", "")
+
+    if not query_string:
+        return JsonResponse({"status": 400, "message": "Query is required."}, status=400)
+
+    # ---- 1. RAG context (FAISS similarity search) ----
+    rag_context = ""
+    try:
+        faiss_index = FAISSIndex.objects.get(tenant_id=tenant_id)
+        user_json = list(userData.objects.filter(tenant_id=tenant_id, phone=phone).values())
+        user_json_str = json.dumps(user_json)
+        similar_chunks = get_similar_chunks_using_faiss(query_string, user_json_str, faiss_index.name)
+        if similar_chunks:
+            rag_context = "\n".join([doc.page_content for doc in similar_chunks])
+    except ObjectDoesNotExist:
+        _agent_logger.info("No FAISS index for tenant %s — agent will work without RAG", tenant_id)
+    except Exception as exc:
+        _agent_logger.warning("FAISS search error: %s", exc)
+
+    # ---- 2. Fetch MCP tools ----
+    tools_openai = []
+    tool_defs_map = {}  # name → tool_def for execution lookup
+    if use_tools:
+        raw_tools = fetch_mcp_tools_for_tenant(tenant_id)
+        for t in raw_tools:
+            fn = convert_tool_to_openai_function(t)
+            tools_openai.append(fn)
+            tool_defs_map[t["name"]] = t
+
+    # ---- 3. Build system prompt ----
+    system_prompt = build_agent_system_prompt(
+        tenant_id, rag_context, language, custom_agent_prompt
+    )
+
+    # ---- 4. Build messages ----
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Append conversation history (last 20 messages)
+    for msg in conversation_history[-20:]:
+        role = "assistant" if msg.get("sender") == "bot" else "user"
+        messages.append({"role": role, "content": msg.get("text", "")})
+
+    messages.append({"role": "user", "content": query_string})
+
+    # ---- 5. Tool-calling loop (max 5 iterations) ----
+    tool_executions = []
+    MAX_ITERATIONS = 5
+    final_answer = ""
+
+    client = get_openai_client()
+
+    for _iteration in range(MAX_ITERATIONS):
+        try:
+            call_kwargs = {
+                "model": "gpt-4o-mini",
+                "messages": messages,
+            }
+            if tools_openai:
+                call_kwargs["tools"] = tools_openai
+                call_kwargs["tool_choice"] = "auto"
+
+            response = client.chat.completions.create(**call_kwargs)
+            choice = response.choices[0]
+
+            # Check for tool calls
+            if choice.message.tool_calls:
+                # Append assistant message with tool_calls
+                messages.append(choice.message)
+
+                for tc in choice.message.tool_calls:
+                    func_name = tc.function.name
+                    try:
+                        func_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        func_args = {}
+
+                    tool_def = tool_defs_map.get(func_name)
+                    if tool_def:
+                        success, data, error, duration = execute_mcp_tool(tool_def, func_args)
+
+                        tool_result_str = json.dumps(data) if data else (error or "No response")
+
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_result_str,
+                        })
+
+                        status_str = "success" if success else "failed"
+                        tool_executions.append({
+                            "tool_name": func_name,
+                            "success": success,
+                            "duration_ms": duration,
+                        })
+
+                        # Fire-and-forget log
+                        log_tool_execution(
+                            tenant_id=tenant_id,
+                            tool_id=str(tool_def.get("id", "")),
+                            phone=phone,
+                            message=query_string,
+                            trigger_type="agent",
+                            params=func_args,
+                            url=tool_def.get("endpoint_url", ""),
+                            response_data=data,
+                            response_msg=tool_result_str[:500],
+                            status=status_str,
+                            error=error,
+                            duration_ms=duration,
+                        )
+                    else:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps({"error": f"Unknown tool: {func_name}"}),
+                        })
+                # Loop back to call OpenAI with tool results
+                continue
+
+            # No tool calls — we have a final answer
+            final_answer = choice.message.content or ""
+            break
+
+        except Exception as exc:
+            _agent_logger.error("OpenAI call error in agent loop: %s", exc)
+            final_answer = "Sorry, I encountered an error processing your request. Please try again."
+            break
+    else:
+        # Exhausted iterations — use last message content if available
+        if not final_answer:
+            final_answer = "I'm still processing your request. Please try again in a moment."
+
+    # ---- 6. Resolve node_id for flow hops ----
+    node_id = "-1"
+    if nodes:
+        try:
+            resolved_id, err = asyncio.run(get_relevant_node_id(query_string, nodes))
+            if resolved_id and not err:
+                node_id = resolved_id
+        except Exception:
+            pass
+
+    # ---- 7. Return response ----
+    return JsonResponse({
+        "status": 200,
+        "message": final_answer,
+        "id": node_id,
+        "tool_executions": tool_executions,
+    })
+
+
 def get_docs():
     """Get all document chunks from database"""
     try:

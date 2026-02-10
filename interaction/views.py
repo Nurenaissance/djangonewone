@@ -132,41 +132,47 @@ def save_conversations(request, contact_id):
         payload['time'] = timezone.now()
 
         tenant = Tenant.objects.get(id=payload['tenant'])
-        key = bytes(tenant.key)
+
+        # Handle missing encryption key — save without encryption rather than crashing
+        if tenant.key:
+            key = bytes(tenant.key)
+        else:
+            logger.warning(f"Tenant {tenant.id} has no encryption key — saving without encryption")
+            key = None
 
         safe_payload = json.loads(json.dumps(payload, default=str))
-        safe_key = base64.b64encode(key).decode()
+        safe_key = base64.b64encode(key).decode() if key else ""
 
-        # TIER 1: Try Celery if Redis is healthy
-        if check_redis_health():
+        # TIER 1: Try Celery if Redis is healthy and encryption key exists
+        if key and check_redis_health():
             try:
                 process_conversations.delay(safe_payload, safe_key)
-                logger.info(f"✅ Conversation queued via Celery for {payload.get('contact_id')}")
+                logger.info(f"Conversation queued via Celery for {payload.get('contact_id')}")
                 return JsonResponse(
                     {"message": "Conversation accepted", "method": "async"},
                     status=202
                 )
             except Exception as celery_error:
-                logger.warning(f"⚠️ Celery failed, trying sync: {celery_error}")
+                logger.warning(f"Celery failed, trying sync: {celery_error}")
 
         # TIER 2: Direct sync save
         try:
-            logger.info(f"📝 Saving conversation directly for {payload.get('contact_id')}")
+            logger.info(f"Saving conversation directly for {payload.get('contact_id')}")
             return save_conversations_sync(payload, key)
         except Exception as sync_error:
-            logger.error(f"❌ Sync save failed, queuing to DB: {sync_error}")
+            logger.error(f"Sync save failed, queuing to DB: {sync_error}")
 
             # TIER 3: Queue to database (guaranteed delivery)
             try:
                 from interaction.pending_tasks import queue_pending_task
                 task = queue_pending_task(safe_payload, key)
-                logger.info(f"📥 Conversation queued to DB (task {task.id}) for {payload.get('contact_id')}")
+                logger.info(f"Conversation queued to DB (task {task.id}) for {payload.get('contact_id')}")
                 return JsonResponse(
                     {"message": "Conversation queued for processing", "method": "db_queue", "task_id": task.id},
                     status=202
                 )
             except Exception as queue_error:
-                logger.critical(f"🚨 ALL SAVE METHODS FAILED for {payload.get('contact_id')}: {queue_error}")
+                logger.critical(f"ALL SAVE METHODS FAILED for {payload.get('contact_id')}: {queue_error}")
                 return JsonResponse(
                     {"error": "Failed to save conversation", "details": str(sync_error)},
                     status=500
@@ -184,6 +190,7 @@ def save_conversations_sync(payload, key):
     """
     Synchronous fallback when Celery is unavailable.
     OPTIMIZED: Uses bulk_create for much faster inserts.
+    Supports key=None for tenants without encryption keys (saves plaintext).
     """
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.backends import default_backend
@@ -198,7 +205,7 @@ def save_conversations_sync(payload, key):
         timestamp = payload.get('time', timezone.now())
 
         if not conversations:
-            logger.warning(f"⚠️ Empty conversations for {contact_id}")
+            logger.warning(f"Empty conversations for {contact_id}")
             return JsonResponse({"message": "No conversations to save"}, status=200)
 
         # OPTIMIZED: Prepare all objects first, then bulk insert
@@ -206,32 +213,50 @@ def save_conversations_sync(payload, key):
 
         for message in conversations:
             try:
-                # Encrypt message text
                 text = message.get('text', '')
-                data_str = json.dumps(text)
-                iv = sync_os.urandom(16)
-                cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-                encryptor = cipher.encryptor()
-                pad_len = 16 - len(data_str) % 16
-                data_str += chr(pad_len) * pad_len
-                encrypted_data = iv + encryptor.update(data_str.encode()) + encryptor.finalize()
 
-                conversations_to_create.append(Conversation(
-                    contact_id=contact_id,
-                    encrypted_message_text=encrypted_data,
-                    sender=message.get('sender', 'unknown'),
-                    tenant_id=tenant_id,
-                    source=source,
-                    business_phone_number_id=bpid,
-                    date_time=timestamp,
-                    message_type=message.get('message_type', 'text'),
-                    media_url=message.get('media_url'),
-                    media_caption=message.get('media_caption'),
-                    media_filename=message.get('media_filename'),
-                    thumbnail_url=message.get('thumbnail_url')
-                ))
+                if key:
+                    # Encrypt message text
+                    data_str = json.dumps(text)
+                    iv = sync_os.urandom(16)
+                    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+                    encryptor = cipher.encryptor()
+                    pad_len = 16 - len(data_str) % 16
+                    data_str += chr(pad_len) * pad_len
+                    encrypted_data = iv + encryptor.update(data_str.encode()) + encryptor.finalize()
+
+                    conversations_to_create.append(Conversation(
+                        contact_id=contact_id,
+                        encrypted_message_text=encrypted_data,
+                        sender=message.get('sender', 'unknown'),
+                        tenant_id=tenant_id,
+                        source=source,
+                        business_phone_number_id=bpid,
+                        date_time=timestamp,
+                        message_type=message.get('message_type', 'text'),
+                        media_url=message.get('media_url'),
+                        media_caption=message.get('media_caption'),
+                        media_filename=message.get('media_filename'),
+                        thumbnail_url=message.get('thumbnail_url')
+                    ))
+                else:
+                    # No encryption key — save as plaintext
+                    conversations_to_create.append(Conversation(
+                        contact_id=contact_id,
+                        message_text=text,
+                        sender=message.get('sender', 'unknown'),
+                        tenant_id=tenant_id,
+                        source=source,
+                        business_phone_number_id=bpid,
+                        date_time=timestamp,
+                        message_type=message.get('message_type', 'text'),
+                        media_url=message.get('media_url'),
+                        media_caption=message.get('media_caption'),
+                        media_filename=message.get('media_filename'),
+                        thumbnail_url=message.get('thumbnail_url')
+                    ))
             except Exception as msg_error:
-                logger.error(f"❌ Error preparing message: {msg_error}")
+                logger.error(f"Error preparing message: {msg_error}")
                 continue
 
         # OPTIMIZED: Single bulk insert instead of N individual inserts
@@ -240,7 +265,7 @@ def save_conversations_sync(payload, key):
                 Conversation.objects.bulk_create(conversations_to_create, batch_size=500)
 
         saved_count = len(conversations_to_create)
-        logger.info(f"✅ Sync saved {saved_count} conversations for {contact_id} (bulk)")
+        logger.info(f"Sync saved {saved_count} conversations for {contact_id} (bulk)")
         return JsonResponse(
             {"message": "Conversation saved (sync-bulk)", "method": "sync-bulk", "saved": saved_count},
             status=201

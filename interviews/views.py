@@ -605,8 +605,11 @@ def import_from_direct_chat(request):
         existing_sessions = set()
         if not force_reimport:
             existing_sessions = set(
-                InterviewResponse.objects.filter(tenant=tenant, flow_name='interviewdrishtee')
-                .values_list('phone_no', 'session_timestamp')
+                InterviewResponse.objects.filter(
+                    tenant=tenant,
+                    flow_name='interviewdrishtee',
+                    session_timestamp__isnull=False,
+                ).values_list('phone_no', 'session_timestamp')
             )
 
         # Get user conversations only (simpler and faster)

@@ -2788,3 +2788,26 @@ ERROR 2025-11-27 19:07:54,683 redis Connection to Redis lost: Retry (19/20) in 1
 CRITICAL 2025-11-27 19:07:55,786 redis 
 Retry limit exceeded while trying to reconnect to the Celery redis result store backend. The Celery application must be restarted.
 
+ERROR 2026-02-10 19:21:38,623 redis on_connection_error:391 Connection to Redis lost: Retry (0/20) now.
+ERROR 2026-02-10 19:21:42,671 redis on_connection_error:391 Connection to Redis lost: Retry (1/20) in 1.00 second.
+ERROR 2026-02-10 19:21:47,731 redis on_connection_error:391 Connection to Redis lost: Retry (2/20) in 1.00 second.
+ERROR 2026-02-10 19:21:52,808 redis on_connection_error:391 Connection to Redis lost: Retry (3/20) in 1.00 second.
+ERROR 2026-02-10 19:21:57,876 redis on_connection_error:391 Connection to Redis lost: Retry (4/20) in 1.00 second.
+ERROR 2026-02-10 19:22:02,938 redis on_connection_error:391 Connection to Redis lost: Retry (5/20) in 1.00 second.
+ERROR 2026-02-10 19:22:08,038 redis on_connection_error:391 Connection to Redis lost: Retry (6/20) in 1.00 second.
+ERROR 2026-02-10 19:22:13,126 redis on_connection_error:391 Connection to Redis lost: Retry (7/20) in 1.00 second.
+ERROR 2026-02-10 19:22:18,179 redis on_connection_error:391 Connection to Redis lost: Retry (8/20) in 1.00 second.
+ERROR 2026-02-10 19:22:23,248 redis on_connection_error:391 Connection to Redis lost: Retry (9/20) in 1.00 second.
+ERROR 2026-02-10 19:22:28,326 redis on_connection_error:391 Connection to Redis lost: Retry (10/20) in 1.00 second.
+ERROR 2026-02-10 19:22:33,407 redis on_connection_error:391 Connection to Redis lost: Retry (11/20) in 1.00 second.
+ERROR 2026-02-10 19:22:38,485 redis on_connection_error:391 Connection to Redis lost: Retry (12/20) in 1.00 second.
+ERROR 2026-02-10 19:22:43,538 redis on_connection_error:391 Connection to Redis lost: Retry (13/20) in 1.00 second.
+ERROR 2026-02-10 19:22:48,609 redis on_connection_error:391 Connection to Redis lost: Retry (14/20) in 1.00 second.
+ERROR 2026-02-10 19:22:53,656 redis on_connection_error:391 Connection to Redis lost: Retry (15/20) in 1.00 second.
+ERROR 2026-02-10 19:22:58,691 redis on_connection_error:391 Connection to Redis lost: Retry (16/20) in 1.00 second.
+ERROR 2026-02-10 19:23:03,736 redis on_connection_error:391 Connection to Redis lost: Retry (17/20) in 1.00 second.
+ERROR 2026-02-10 19:23:08,815 redis on_connection_error:391 Connection to Redis lost: Retry (18/20) in 1.00 second.
+ERROR 2026-02-10 19:23:13,903 redis on_connection_error:391 Connection to Redis lost: Retry (19/20) in 1.00 second.
+CRITICAL 2026-02-10 19:23:18,962 redis reconnect_on_error:132 
+Retry limit exceeded while trying to reconnect to the Celery redis result store backend. The Celery application must be restarted.
+

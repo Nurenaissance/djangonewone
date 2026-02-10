@@ -112,7 +112,8 @@ urlpatterns = [
     path('get-tenant/', wa_chat_views.get_tenant),
     path('api/sentiment-analysis/conversation/<str:conversation_id>/', commsenti.analyze_sentiment_for_conversation, name='analyze_sentiment'),
     path('user-data/', analyticsviews.userCreateListView.as_view(), name='add-user-data'),
-    path('query-faiss/', vectorize.query , name='query-into-faiss-data'),\
+    path('query-faiss/', vectorize.query , name='query-into-faiss-data'),
+    path('agent-query/', vectorize.agent_query, name='agent-query'),\
     path('whatsapp-media-uploads/', vectorize.handle_media_uploads , name="return_json_object"),
     path('update-last-seen/<str:phone>/<str:type>', cviews.updateLastSeen),
     path('verifyTenant/', tenview.verify_tenant, name='verify-tenant'),
