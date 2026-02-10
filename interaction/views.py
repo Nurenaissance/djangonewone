@@ -107,12 +107,20 @@ def bulk_create_with_batching(objects: List, batch_size: int = 500):
 # 3. Database queue (guaranteed delivery) - last resort, processed by cron
 
 def check_redis_health():
-    """Quick check if Redis is accessible"""
+    """Check if Redis is accessible AND a Celery worker is actually running.
+    Without a worker, tasks queue in Redis but never get processed."""
     try:
         from django.conf import settings
         import redis
         r = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
         r.ping()
+        # Also check if at least one Celery worker is registered
+        from simplecrm.celery import app as celery_app
+        inspector = celery_app.control.inspect(timeout=2)
+        active_workers = inspector.ping()
+        if not active_workers:
+            logger.info("Redis healthy but no Celery workers found — using sync save")
+            return False
         return True
     except Exception:
         return False
