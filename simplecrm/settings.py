@@ -224,28 +224,28 @@ WSGI_APPLICATION = 'simplecrm.wsgi.application'
 # - Eliminates "remaining connection slots" errors permanently
 # =============================================================================
 
-# DEFAULT TO TRUE - Enable PgBouncer by default for production stability
-USE_PGBOUNCER = os.environ.get('USE_PGBOUNCER', 'true').lower() == 'true'
+# DEFAULT TO FALSE - Only use PgBouncer if explicitly enabled AND confirmed in Azure Portal
+# To enable: Azure Portal → PostgreSQL → Server Parameters → pgbouncer.enabled = true
+# Then set USE_PGBOUNCER=true in Azure App Service Configuration
+USE_PGBOUNCER = os.environ.get('USE_PGBOUNCER', 'false').lower() == 'true'
+
+# Port selection: env var override > PgBouncer toggle > direct PostgreSQL
+DB_PORT = os.environ.get('DB_PORT', '6432' if USE_PGBOUNCER else '5432')
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'nurenpostgres_Whatsapp',
-        'USER': 'nurenai',
-        'PASSWORD': 'Biz1nurenWar*',
-        'HOST': 'nurenaistore.postgres.database.azure.com',
-        # CRITICAL: Use port 5432 (direct) until PgBouncer is enabled in Azure Portal
-        # Once PgBouncer is enabled: Azure Portal → PostgreSQL → Server Parameters → pgbouncer.enabled = true
-        # Then change this back to 6432
-        'PORT': '6432',  # PgBouncer port (connection pooling enabled)
+        'NAME': os.environ.get('DB_NAME', 'nurenpostgres_Whatsapp'),
+        'USER': os.environ.get('DB_USER', 'nurenai'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'Biz1nurenWar*'),
+        'HOST': os.environ.get('DB_HOST', 'nurenaistore.postgres.database.azure.com'),
+        'PORT': DB_PORT,
         'OPTIONS': {
             'sslmode': 'require',
             'connect_timeout': 10,
         },
-        # OPTIMIZED: Reuse connections for 60 seconds
-        # This dramatically improves performance by avoiding TCP connection overhead
-        # If you get "remaining connection slots" errors, enable PgBouncer in Azure Portal
-        'CONN_MAX_AGE': 0,  # With PgBouncer in transaction mode, set to 0 (close after each request)
+        # PgBouncer transaction mode requires CONN_MAX_AGE=0; direct mode can reuse connections
+        'CONN_MAX_AGE': 0 if USE_PGBOUNCER else 60,
         'CONN_HEALTH_CHECKS': True,
     }
 }
