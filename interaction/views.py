@@ -107,20 +107,12 @@ def bulk_create_with_batching(objects: List, batch_size: int = 500):
 # 3. Database queue (guaranteed delivery) - last resort, processed by cron
 
 def check_redis_health():
-    """Check if Redis is accessible AND a Celery worker is actually running.
-    Without a worker, tasks queue in Redis but never get processed."""
+    """Quick check if Redis is accessible"""
     try:
         from django.conf import settings
         import redis
         r = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
         r.ping()
-        # Also check if at least one Celery worker is registered
-        from simplecrm.celery import app as celery_app
-        inspector = celery_app.control.inspect(timeout=2)
-        active_workers = inspector.ping()
-        if not active_workers:
-            logger.info("Redis healthy but no Celery workers found — using sync save")
-            return False
         return True
     except Exception:
         return False
@@ -151,19 +143,7 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode() if key else ""
 
-        # TIER 1: Try Celery if Redis is healthy and encryption key exists
-        if key and check_redis_health():
-            try:
-                process_conversations.delay(safe_payload, safe_key)
-                logger.info(f"Conversation queued via Celery for {payload.get('contact_id')}")
-                return JsonResponse(
-                    {"message": "Conversation accepted", "method": "async"},
-                    status=202
-                )
-            except Exception as celery_error:
-                logger.warning(f"Celery failed, trying sync: {celery_error}")
-
-        # TIER 2: Direct sync save
+        # PRIMARY: Always save synchronously (guaranteed to work)
         try:
             logger.info(f"Saving conversation directly for {payload.get('contact_id')}")
             return save_conversations_sync(payload, key)
