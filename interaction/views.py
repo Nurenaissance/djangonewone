@@ -118,25 +118,54 @@ def check_redis_health():
         return False
 
 
+def _get_dedup_redis():
+    """Get a Redis client for deduplication (cached per-thread via module-level)."""
+    try:
+        from django.conf import settings
+        import redis
+        return redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
+    except Exception:
+        return None
+
+
 def _check_idempotency(message_id):
     """
     Check if a message_id was already processed recently (5-min window).
     Returns True if duplicate (already processed), False if new.
-    Uses Redis SET NX to be atomic and safe across multiple workers.
+
+    Uses a 2-phase approach:
+    - Phase 1 (here): SET NX with short 30s TTL as a "processing lock"
+    - Phase 2 (_mark_idempotency_done): Extend TTL to 5 min after successful save
+
+    If the save fails, the 30s lock expires and retries can succeed.
+    If the save succeeds, the 5-min TTL prevents retry duplicates.
     """
     if not message_id:
         return False
     try:
-        from django.conf import settings
-        import redis
-        r = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
+        r = _get_dedup_redis()
+        if not r:
+            return False
         key = f"msg:dedup:{message_id}"
-        # SET NX returns True if key was set (new message), False if already exists (duplicate)
-        was_set = r.set(key, "1", nx=True, ex=300)  # 5-minute TTL
+        # Short 30s lock — if save fails, retries can still succeed after lock expires
+        was_set = r.set(key, "processing", nx=True, ex=30)
         return not was_set  # True = duplicate, False = new
     except Exception:
-        # If Redis is down, skip dedup — better to save a duplicate than lose a message
         return False
+
+
+def _mark_idempotency_done(message_id):
+    """Mark a message_id as successfully saved — extend TTL to 5 minutes."""
+    if not message_id:
+        return
+    try:
+        r = _get_dedup_redis()
+        if not r:
+            return
+        key = f"msg:dedup:{message_id}"
+        r.set(key, "done", ex=300)  # 5-minute TTL
+    except Exception:
+        pass
 
 
 @csrf_exempt
@@ -173,10 +202,14 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode() if key else ""
 
-        # TIER 1: Try Celery if Redis is healthy and we have a key
-        if key and check_redis_health():
+        # TIER 1: Try Celery ONLY if explicitly enabled (requires Celery worker running)
+        # Enable by setting USE_CELERY=true in Azure App Service Configuration
+        use_celery = os.environ.get('USE_CELERY', 'false').lower() == 'true'
+        if use_celery and key and check_redis_health():
             try:
                 process_conversations.delay(safe_payload, safe_key)
+                # Note: _mark_idempotency_done is called inside the Celery task
+                # after the actual DB save succeeds (see interaction/tasks.py)
                 logger.info(f"Conversation queued via Celery for {payload.get('contact_id')}")
                 return JsonResponse(
                     {"message": "Conversation accepted", "method": "async"},
@@ -185,10 +218,12 @@ def save_conversations(request, contact_id):
             except Exception as celery_error:
                 logger.warning(f"Celery failed, trying sync: {celery_error}")
 
-        # TIER 2: Direct sync save (fallback)
+        # TIER 2: Direct sync save (primary path until Celery is enabled)
         try:
             logger.info(f"Saving conversation directly for {payload.get('contact_id')}")
-            return save_conversations_sync(payload, key)
+            result = save_conversations_sync(payload, key)
+            _mark_idempotency_done(message_id)
+            return result
         except Exception as sync_error:
             logger.error(f"Sync save failed, queuing to DB: {sync_error}")
 
@@ -196,6 +231,7 @@ def save_conversations(request, contact_id):
             try:
                 from interaction.pending_tasks import queue_pending_task
                 task = queue_pending_task(safe_payload, key)
+                _mark_idempotency_done(message_id)
                 logger.info(f"Conversation queued to DB (task {task.id}) for {payload.get('contact_id')}")
                 return JsonResponse(
                     {"message": "Conversation queued for processing", "method": "db_queue", "task_id": task.id},

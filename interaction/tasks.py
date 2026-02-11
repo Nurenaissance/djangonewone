@@ -86,6 +86,15 @@ def process_conversations(self, payload, key):
                     Conversation.objects.bulk_create(conversations_to_create)
                     total_saved += len(conversations_to_create)
 
+        # Mark idempotency as done (extend TTL to 5 min) so retries are blocked
+        msg_id = payload.get('message_id')
+        if msg_id:
+            try:
+                from interaction.views import _mark_idempotency_done
+                _mark_idempotency_done(msg_id)
+            except Exception:
+                pass  # Non-critical — dedup lock will expire naturally
+
         logger.info(f"✅ Saved {total_saved} conversations for {contact_id}")
         return {'status': 'success', 'saved': total_saved, 'contact_id': contact_id}
 
