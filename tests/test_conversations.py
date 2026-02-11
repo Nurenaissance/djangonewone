@@ -15,10 +15,11 @@ pytestmark = pytest.mark.django_db
 class TestSaveConversationsEndpoint:
     """Tests for /whatsapp_convo_post/<contact_id>/ endpoint."""
 
+    @patch.dict('os.environ', {'USE_CELERY': 'true'})
     def test_save_conversation_with_celery(
         self, django_client, contact, tenant, whatsapp_tenant_data, mock_redis, mock_celery
     ):
-        """Test conversation saved via Celery when Redis is healthy."""
+        """Test conversation saved via Celery when Redis is healthy and USE_CELERY=true."""
         payload = {
             'conversations': [
                 {'text': 'Hello', 'sender': 'user', 'message_type': 'text'},
