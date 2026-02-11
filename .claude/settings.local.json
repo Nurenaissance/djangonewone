@@ -10,7 +10,9 @@
       "Bash(python -m pytest:*)",
       "Bash(python:*)",
       "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test python:*)",
-      "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test pytest:*)"
+      "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test pytest:*)",
+      "Bash(xargs:*)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

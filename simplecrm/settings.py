@@ -127,7 +127,7 @@ LOGGING = {
             'backupCount': 5,  # Keep 5 backup files
         },
         'console': {
-            'level': 'WARNING',
+            'level': 'INFO',
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
@@ -237,7 +237,7 @@ DATABASES = {
         # CRITICAL: Use port 5432 (direct) until PgBouncer is enabled in Azure Portal
         # Once PgBouncer is enabled: Azure Portal → PostgreSQL → Server Parameters → pgbouncer.enabled = true
         # Then change this back to 6432
-        'PORT': '5432',  # Changed to direct connection - PgBouncer not enabled in Azure
+        'PORT': '6432',  # PgBouncer port (connection pooling enabled)
         'OPTIONS': {
             'sslmode': 'require',
             'connect_timeout': 10,
@@ -245,7 +245,7 @@ DATABASES = {
         # OPTIMIZED: Reuse connections for 60 seconds
         # This dramatically improves performance by avoiding TCP connection overhead
         # If you get "remaining connection slots" errors, enable PgBouncer in Azure Portal
-        'CONN_MAX_AGE': 60,  # Reuse connections for 60 seconds (was 0)
+        'CONN_MAX_AGE': 0,  # With PgBouncer in transaction mode, set to 0 (close after each request)
         'CONN_HEALTH_CHECKS': True,
     }
 }
@@ -343,7 +343,7 @@ CELERY_TIMEZONE = 'UTC'
 # Celery Worker Configuration
 # CRITICAL: Keep this LOW to prevent database connection exhaustion
 # Each worker can hold a database connection, so fewer workers = fewer connections
-CELERY_WORKER_CONCURRENCY = 1  # Reduced to 1 to minimize DB connections
+CELERY_WORKER_CONCURRENCY = 2  # 2 concurrent tasks (balanced with PgBouncer pooling)
 
 # Task Routing Configuration
 CELERY_TASK_ROUTES = {
@@ -369,14 +369,14 @@ REST_FRAMEWORK = {
         'simplecrm.throttling.TenantRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'burst': '60/min',
-        'sustained': '1000/day',
-        'anon_burst': '20/min',
-        'anon_sustained': '200/day',
-        'contacts': '120/min',
-        'webhook': '300/min',
-        'tenant': '500/min',
-        'conversation_save': '100/min',
-        'interview': '30/min',
+        'burst': '120/min',
+        'sustained': '5000/day',
+        'anon_burst': '30/min',
+        'anon_sustained': '500/day',
+        'contacts': '300/min',
+        'webhook': '600/min',
+        'tenant': '1000/min',
+        'conversation_save': '300/min',
+        'interview': '60/min',
     }
 }

@@ -118,6 +118,27 @@ def check_redis_health():
         return False
 
 
+def _check_idempotency(message_id):
+    """
+    Check if a message_id was already processed recently (5-min window).
+    Returns True if duplicate (already processed), False if new.
+    Uses Redis SET NX to be atomic and safe across multiple workers.
+    """
+    if not message_id:
+        return False
+    try:
+        from django.conf import settings
+        import redis
+        r = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
+        key = f"msg:dedup:{message_id}"
+        # SET NX returns True if key was set (new message), False if already exists (duplicate)
+        was_set = r.set(key, "1", nx=True, ex=300)  # 5-minute TTL
+        return not was_set  # True = duplicate, False = new
+    except Exception:
+        # If Redis is down, skip dedup — better to save a duplicate than lose a message
+        return False
+
+
 @csrf_exempt
 def save_conversations(request, contact_id):
     """
@@ -131,6 +152,15 @@ def save_conversations(request, contact_id):
         payload = extract_payload(request)
         payload['time'] = timezone.now()
 
+        # Idempotency check: skip if this message_id was already saved recently
+        message_id = payload.get('message_id')
+        if _check_idempotency(message_id):
+            logger.info(f"Duplicate save skipped for message_id={message_id[:30] if message_id else 'N/A'}")
+            return JsonResponse(
+                {"message": "Already saved", "method": "deduplicated"},
+                status=200
+            )
+
         tenant = Tenant.objects.get(id=payload['tenant'])
 
         # Handle missing encryption key — save without encryption rather than crashing
@@ -143,7 +173,19 @@ def save_conversations(request, contact_id):
         safe_payload = json.loads(json.dumps(payload, default=str))
         safe_key = base64.b64encode(key).decode() if key else ""
 
-        # PRIMARY: Always save synchronously (guaranteed to work)
+        # TIER 1: Try Celery if Redis is healthy and we have a key
+        if key and check_redis_health():
+            try:
+                process_conversations.delay(safe_payload, safe_key)
+                logger.info(f"Conversation queued via Celery for {payload.get('contact_id')}")
+                return JsonResponse(
+                    {"message": "Conversation accepted", "method": "async"},
+                    status=202
+                )
+            except Exception as celery_error:
+                logger.warning(f"Celery failed, trying sync: {celery_error}")
+
+        # TIER 2: Direct sync save (fallback)
         try:
             logger.info(f"Saving conversation directly for {payload.get('contact_id')}")
             return save_conversations_sync(payload, key)
@@ -343,7 +385,8 @@ def extract_payload(request) -> Dict:
         'tenant': body.get('tenant'),
         'source': request.GET.get('source', ''),
         'business_phone_number_id': body.get('business_phone_number_id'),
-        'time': body.get('time')
+        'time': body.get('time'),
+        'message_id': body.get('message_id'),  # WhatsApp wamid for deduplication
     }
 
 def handle_error(error):
