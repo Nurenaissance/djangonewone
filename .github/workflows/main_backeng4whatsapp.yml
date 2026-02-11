@@ -83,7 +83,6 @@ jobs:
           name: python-app
           path: |
             .
-            !antenv/
             !tests/
             !.git/
             !__pycache__/
