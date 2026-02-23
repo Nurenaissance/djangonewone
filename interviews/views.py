@@ -846,9 +846,20 @@ def public_interview_submit(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Normalize phone number to digits-only for consistent storage/display
+        phone_number_clean = re.sub(r'\D', '', phone_number or '')
+        if not phone_number_clean:
+            return Response(
+                {
+                    "success": False,
+                    "error": "phone_number must contain digits"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Hardcode tenant for all public interview submissions
         try:
-            tenant = Tenant.objects.get(tenant_id='ehgymjv')
+            tenant = Tenant.objects.get(id='ehgymjv')
         except Tenant.DoesNotExist:
             logger.error("Tenant 'ehgymjv' not found in database")
             return Response(
@@ -916,6 +927,7 @@ def public_interview_submit(request):
         calibration_url = azure_client.upload_audio_file(
             file_data=calibration_audio_file,
             candidate_name=candidate_name,
+            phone_number=phone_number_clean,
             interview_type=interview_type,
             part_name='calibration',
             file_extension=calibration_ext,
@@ -925,6 +937,7 @@ def public_interview_submit(request):
         part1_url = azure_client.upload_audio_file(
             file_data=part1_audio_file,
             candidate_name=candidate_name,
+            phone_number=phone_number_clean,
             interview_type=interview_type,
             part_name='part1',
             file_extension=part1_ext,
@@ -934,6 +947,7 @@ def public_interview_submit(request):
         part2_url = azure_client.upload_audio_file(
             file_data=part2_audio_file,
             candidate_name=candidate_name,
+            phone_number=phone_number_clean,
             interview_type=interview_type,
             part_name='part2',
             file_extension=part2_ext,
@@ -957,7 +971,7 @@ def public_interview_submit(request):
 
         # Create InterviewResponse record (associated with hardcoded tenant)
         interview_response = InterviewResponse.objects.create(
-            phone_no=phone_number,
+            phone_no=phone_number_clean,
             candidate_name=candidate_name,
             interview_type=interview_type,
             flow_name='naad_2.0_interview',

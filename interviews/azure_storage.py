@@ -48,6 +48,7 @@ class AzureStorageClient:
         self,
         file_data: BinaryIO,
         candidate_name: str,
+        phone_number: Optional[str],
         interview_type: str,
         part_name: str,
         file_extension: str = "wav",
@@ -59,6 +60,7 @@ class AzureStorageClient:
         Args:
             file_data: Binary file data (file object or bytes)
             candidate_name: Name of the candidate (used in path)
+            phone_number: Candidate phone number (used in path)
             interview_type: 'vidushi' or 'maan_vidushi'
             part_name: e.g., 'calibration', 'part1', 'part2'
             file_extension: File extension (default: 'wav')
@@ -68,20 +70,21 @@ class AzureStorageClient:
             Public URL of the uploaded file, or None if upload failed
 
         Structure:
-            interviews/{interview_type}/{candidate_name_sanitized}/{timestamp}_{part_name}.{ext}
+            interviews/{interview_type}/{candidate_name_sanitized}_{phone}/{timestamp}_{part_name}.{ext}
 
         Example:
-            interviews/vidushi/john_doe/20260203_143022_calibration.wav
+            interviews/vidushi/john_doe_919999999999/20260203_143022_calibration.wav
         """
         try:
             # Sanitize candidate name for use in path (remove special chars, spaces to underscores)
             candidate_name_clean = self._sanitize_filename(candidate_name)
+            phone_clean = self._sanitize_phone(phone_number) if phone_number else "unknown"
 
             # Generate timestamp for unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
             # Construct blob path
-            blob_path = f"interviews/{interview_type}/{candidate_name_clean}/{timestamp}_{part_name}.{file_extension}"
+            blob_path = f"interviews/{interview_type}/{candidate_name_clean}_{phone_clean}/{timestamp}_{part_name}.{file_extension}"
 
             logger.info(f"Uploading audio file to: {blob_path}")
 
@@ -159,6 +162,22 @@ class AzureStorageClient:
         filename = filename[:50]
 
         return filename
+
+    @staticmethod
+    def _sanitize_phone(phone_number: str) -> str:
+        """
+        Sanitize phone number for use in Azure Blob Storage paths
+
+        Args:
+            phone_number: Original phone number
+
+        Returns:
+            Digits-only phone number, limited to 20 chars
+        """
+        import re
+
+        digits = re.sub(r'\D', '', phone_number or '')
+        return digits[:20] if digits else "unknown"
 
     def delete_file(self, blob_url: str) -> bool:
         """
