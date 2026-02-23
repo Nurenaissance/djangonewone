@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command \"Get-Content ''C:\\\\Users\\\\Adarsh\\\\MyProject\\\\Deployed_Finals\\\\djangobackendaug2025\\\\whatsapp_latest_final-mainjunk\\\\whatsapp_latest_final_withclaude\\\\celery.log'' -Tail 100\")",
+      "Bash(powershell -Command \"New-Item -ItemType Directory -Force -Path ''C:\\\\Users\\\\Adarsh\\\\MyProject\\\\Deployed_Finals\\\\djangobackendaug2025\\\\whatsapp_latest_final-mainjunk\\\\whatsapp_latest_final_withclaude\\\\interaction\\\\management\\\\commands''\")",
+      "Bash(pytest:*)",
+      "Bash(npm install)",
+      "Bash(npm test)",
+      "Bash(dir:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)",
+      "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test python:*)",
+      "Bash(DJANGO_SETTINGS_MODULE=simplecrm.settings_test pytest:*)",
+      "Bash(xargs:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(node --check:*)",
+      "Bash(node -e:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix DB connection refused: default to port 5432 instead of PgBouncer 6432\n\nPgBouncer port 6432 was hardcoded but not enabled on Azure PostgreSQL,\ncausing all database operations to fail with Connection refused.\nUSE_PGBOUNCER flag existed but was never used to control the port.\n\nNow defaults to direct PostgreSQL \\(5432\\) and only uses PgBouncer when\nexplicitly enabled via USE_PGBOUNCER=true env var. DB credentials also\nread from env vars with hardcoded fallbacks.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)"
+    ]
+  }
+}

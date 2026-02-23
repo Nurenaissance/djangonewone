@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary colors - Nuren AI blue -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_dark">#1D4ED8</color>
+    <color name="primary_light">#60A5FA</color>
+
+    <!-- Secondary colors - Purple accent -->
+    <color name="secondary">#7C3AED</color>
+    <color name="secondary_dark">#6D28D9</color>
+    <color name="secondary_light">#A78BFA</color>
+
+    <!-- Background -->
+    <color name="background">#FFFFFF</color>
+    <color name="background_dark">#0B141A</color>
+    <color name="surface">#F5F5F5</color>
+    <color name="surface_dark">#1C1C1C</color>
+
+    <!-- Text -->
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="text_white">#FFFFFF</color>
+
+    <!-- Chat colors -->
+    <color name="chat_bubble_sent">#DCF8C6</color>
+    <color name="chat_bubble_received">#FFFFFF</color>
+    <color name="chat_background">#ECE5DD</color>
+
+    <!-- Status colors -->
+    <color name="success">#4CAF50</color>
+    <color name="error">#F44336</color>
+    <color name="warning">#FF9800</color>
+    <color name="info">#2196F3</color>
+
+    <!-- Divider -->
+    <color name="divider">#E0E0E0</color>
+
+    <!-- Black and White -->
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+</resources>

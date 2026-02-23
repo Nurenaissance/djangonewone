@@ -1,0 +1,112 @@
+name: Deploy Frontend to Azure Static Web Apps
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'whatsappBusinessAutomation_withclaude/**'
+      - '.github/workflows/deploy-frontend.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+    paths:
+      - 'whatsappBusinessAutomation_withclaude/**'
+  workflow_dispatch:  # Manual trigger
+
+env:
+  NODE_VERSION: '18'
+  WORKING_DIRECTORY: './whatsappBusinessAutomation_withclaude'
+
+jobs:
+  build_and_deploy:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+    environment:
+      name: 'production'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: '${{ env.WORKING_DIRECTORY }}/package-lock.json'
+
+      - name: Install dependencies
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          npm ci
+
+      - name: Build application
+        env:
+          # Production environment variables
+          VITE_DJANGO_URL: ${{ secrets.VITE_DJANGO_URL }}
+          VITE_FASTAPI_URL: ${{ secrets.VITE_FASTAPI_URL }}
+          VITE_NODEJS_URL: ${{ secrets.VITE_NODEJS_URL }}
+          VITE_META_GRAPH_API_URL: ${{ secrets.VITE_META_GRAPH_API_URL }}
+          VITE_WABA_ID: ${{ secrets.VITE_WABA_ID }}
+          # VITE_META_ACCESS_TOKEN: ${{ secrets.VITE_META_ACCESS_TOKEN }}  # Optional - prefer backend proxy
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          npm run build
+
+      - name: Deploy to Azure Static Web Apps
+        id: deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "whatsappBusinessAutomation_withclaude"
+          output_location: "dist"
+          skip_app_build: true  # We already built above
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 30
+
+          # Note: Static Web Apps URL varies, manual verification recommended
+          echo "✅ Build completed successfully"
+          echo "⚠️ Manual verification required:"
+          echo "1. Visit your Static Web App URL"
+          echo "2. Check browser console for API configuration"
+          echo "3. Test API connectivity"
+          echo "4. Verify no CORS errors"
+
+      - name: Create deployment summary
+        run: |
+          echo "### Frontend Deployment Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "- **Node Version:** ${{ env.NODE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Build completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Manual Verification Required:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Visit Static Web App URL" >> $GITHUB_STEP_SUMMARY
+          echo "2. Open browser console (F12)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Verify API configuration is logged" >> $GITHUB_STEP_SUMMARY
+          echo "4. Test login and API calls" >> $GITHUB_STEP_SUMMARY
+          echo "5. Check for CORS errors" >> $GITHUB_STEP_SUMMARY
+
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    steps:
+      - name: Close Pull Request
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: "close"

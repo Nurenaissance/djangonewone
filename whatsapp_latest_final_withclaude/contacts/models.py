@@ -1,0 +1,26 @@
+from django.db import models
+from django.contrib.auth.models import User
+from django.conf import settings
+from tenant.models import Tenant 
+
+class Contact(models.Model):
+    name = models.CharField("name", max_length=255, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    phone = models.CharField(max_length=20, db_index=True)
+    address = models.TextField(blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    createdBy = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='contact_created_by', on_delete=models.CASCADE, null=True, blank=True)
+    createdOn = models.DateTimeField("Created on", auto_now_add=True, null=True, blank=True)
+    isActive = models.BooleanField(default=False, null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=True, blank=True, db_index=True)
+    template_key = models.CharField(max_length=50, null=True, blank=True)
+    last_seen = models.DateTimeField(null=True, blank=True)
+    last_delivered = models.DateTimeField(null=True, blank=True)
+    last_replied = models.DateTimeField(null=True, blank=True)
+    customField = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['tenant', 'phone'], name='contact_tenant_phone_idx'),
+            models.Index(fields=['phone', 'tenant'], name='contact_phone_tenant_idx'),
+        ]

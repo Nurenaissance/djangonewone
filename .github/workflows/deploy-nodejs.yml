@@ -1,0 +1,105 @@
+name: Deploy Node.js to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'whatsapp_bot_server_withclaude/**'
+      - '.github/workflows/deploy-nodejs.yml'
+  workflow_dispatch:  # Manual trigger
+
+env:
+  AZURE_WEBAPP_NAME: whatsappbotserver
+  NODE_VERSION: '18'
+  WORKING_DIRECTORY: './whatsapp_bot_server_withclaude'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: 'production'
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: '${{ env.WORKING_DIRECTORY }}/package-lock.json'
+
+      - name: Install dependencies
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          npm ci
+
+      - name: Run tests
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          npm test
+
+      - name: Clean dev dependencies for production
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          npm prune --production
+
+      - name: Create deployment package
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          zip -r ../nodejs-deploy.zip . \
+            -x "*.git*" \
+            -x "node_modules/.cache/*" \
+            -x ".env" \
+            -x "*.log"
+
+      - name: Deploy to Azure Web App
+        id: deploy
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_NODEJS_PUBLISH_PROFILE }}
+          package: './nodejs-deploy.zip'
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to complete..."
+          sleep 30
+
+          # Root endpoint check
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/)
+
+          if [ $HTTP_STATUS -eq 200 ]; then
+            echo "✅ Deployment successful - Service responding"
+          else
+            echo "❌ Service check failed with status $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Check Redis connection
+        run: |
+          echo "Checking application logs for Redis connection..."
+          echo "⚠️ Manual verification required:"
+          echo "1. Check Azure Portal logs for 'Redis: Connected and ready'"
+          echo "2. Or check logs for fallback mode: 'Using in-memory rate limiting'"
+
+      - name: Create deployment summary
+        run: |
+          echo "### Node.js Deployment Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Name:** ${{ env.AZURE_WEBAPP_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
+          echo "- **Node Version:** ${{ env.NODE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Service responding" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Verify Redis connection in Azure Portal logs" >> $GITHUB_STEP_SUMMARY
+          echo "2. Test rate limiting functionality" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor Application Insights for errors" >> $GITHUB_STEP_SUMMARY

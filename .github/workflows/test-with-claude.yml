@@ -1,0 +1,199 @@
+name: Claude E2E Testing
+
+on:
+  # Trigger after deployment workflows complete
+  workflow_run:
+    workflows:
+      - "Deploy Node.js to Azure App Service"
+      - "Deploy FastAPI to Azure App Service"
+      - "Deploy Frontend to Azure Static Web Apps"
+    types: [completed]
+    branches: [main]
+
+  # Run on PRs for pre-merge testing
+  pull_request:
+    branches: [main]
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      test_scope:
+        description: 'Test scope (auto, all, health-only)'
+        required: false
+        default: 'auto'
+      force_all:
+        description: 'Force all tests regardless of diff'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  models: read
+
+jobs:
+  e2e-tests:
+    runs-on: ubuntu-latest
+    # Skip if the triggering workflow failed (for workflow_run events)
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git diff
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'e2e-claude-tester/package-lock.json'
+
+      - name: Install dependencies
+        run: |
+          cd e2e-claude-tester
+          npm ci || npm install
+
+      - name: Compute git diff
+        id: diff
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+            HEAD=${{ github.event.pull_request.head.sha }}
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # Compare against the commit before the push
+            HEAD=${{ github.event.workflow_run.head_sha }}
+            BASE=$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "${HEAD}")
+          else
+            # Manual trigger — compare with previous commit
+            HEAD=${{ github.sha }}
+            BASE=$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "${HEAD}")
+          fi
+
+          echo "Computing diff between ${BASE} and ${HEAD}"
+
+          CHANGED_FILES=$(git diff --name-only "${BASE}" "${HEAD}" 2>/dev/null || echo "")
+          DIFF_STATS=$(git diff --stat "${BASE}" "${HEAD}" 2>/dev/null | tail -1 || echo "")
+
+          # Write to env files (handle multiline)
+          echo "CHANGED_FILES<<EOFCHANGED" >> $GITHUB_ENV
+          echo "${CHANGED_FILES}" >> $GITHUB_ENV
+          echo "EOFCHANGED" >> $GITHUB_ENV
+
+          echo "DIFF_SUMMARY=${DIFF_STATS}" >> $GITHUB_ENV
+
+          echo "Changed files:"
+          echo "${CHANGED_FILES}"
+
+      - name: Wait for services to stabilize
+        if: github.event_name == 'workflow_run'
+        run: |
+          echo "Waiting 45s for deployed services to stabilize..."
+          sleep 45
+
+      - name: Run E2E tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODEJS_URL: ${{ secrets.E2E_NODEJS_URL }}
+          FASTAPI_URL: ${{ secrets.E2E_FASTAPI_URL }}
+          DJANGO_URL: ${{ secrets.E2E_DJANGO_URL }}
+          APP_SECRET: ${{ secrets.E2E_APP_SECRET }}
+          TEST_PHONE_NUMBER_ID: ${{ secrets.E2E_TEST_PHONE_NUMBER_ID }}
+          TEST_USER_PHONE: ${{ secrets.E2E_TEST_USER_PHONE }}
+          TEST_TENANT_ID: ${{ secrets.E2E_TEST_TENANT_ID }}
+          TEST_BPID: ${{ secrets.E2E_TEST_BPID }}
+          TEST_USERNAME: ${{ secrets.E2E_TEST_USERNAME }}
+          TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+          TEST_SCOPE: ${{ github.event.inputs.test_scope || 'auto' }}
+          FORCE_ALL_TESTS: ${{ github.event.inputs.force_all || 'false' }}
+        run: |
+          cd e2e-claude-tester
+          node src/index.js
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: e2e-claude-tester/results.json
+          retention-days: 30
+
+      - name: Generate GitHub Summary
+        if: always()
+        run: |
+          if [ -f e2e-claude-tester/results.json ]; then
+            cd e2e-claude-tester
+            node src/reporter.js summary >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## E2E Tests" >> $GITHUB_STEP_SUMMARY
+            echo "No results.json found — tests may have crashed before producing results." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'e2e-claude-tester/results.json';
+
+            let body = '## E2E Test Results\n\nNo results available — tests may have failed to run.';
+
+            if (fs.existsSync(path)) {
+              const data = JSON.parse(fs.readFileSync(path, 'utf-8'));
+              const { summary, tests } = data;
+              const icon = (s) => s === 'pass' ? '✅' : s === 'fail' ? '❌' : '⏭️';
+
+              body = `## E2E Test Results\n\n`;
+              body += `**${summary.passed}/${summary.total} passed**`;
+              if (summary.failed > 0) body += ` | ${summary.failed} failed`;
+              if (summary.skipped > 0) body += ` | ${summary.skipped} skipped`;
+              body += `\n\n`;
+              body += `| Status | Test | Service | Reason |\n`;
+              body += `|--------|------|---------|--------|\n`;
+              for (const t of tests) {
+                body += `| ${icon(t.status)} | ${t.test_name} | ${t.service} | ${(t.reason || '').slice(0, 100)} |\n`;
+              }
+              body += `\n_Triggered by: ${context.eventName}_`;
+            }
+
+            // Find existing bot comment to update
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c => c.body.includes('## E2E Test Results'));
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Check test results
+        if: always()
+        run: |
+          if [ -f e2e-claude-tester/results.json ]; then
+            FAILED=$(node -e "const d=JSON.parse(require('fs').readFileSync('e2e-claude-tester/results.json','utf-8')); console.log(d.summary.failed)")
+            if [ "$FAILED" != "0" ]; then
+              echo "::error::${FAILED} E2E test(s) failed"
+              exit 1
+            fi
+            echo "All E2E tests passed"
+          else
+            echo "::warning::No test results found"
+          fi

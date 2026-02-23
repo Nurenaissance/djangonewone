@@ -1,0 +1,51 @@
+# Environment & secrets
+.env
+*.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.sqlite3
+*.db
+antenv/
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android build
+*.apk
+*.aab
+app/build/
+
+# iOS
+Pods/
+*.xcworkspace
+DerivedData/
+
+# Logs
+*.log
+
+# Windows special files
+nul
+
+# Embedded git repos (these have their own repos)
+fastAPIWhatsapp_withclaude/.git
+whatsappBusinessAutomation_withclaude/

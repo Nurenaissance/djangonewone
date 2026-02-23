@@ -1,0 +1,30 @@
+{
+  "apps": [
+    {
+      "name": "myserver",
+      "script": "./server.js",
+      "instances": 4,
+      "exec_mode": "cluster",
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "500M",
+      "log_file": "/home/LogFiles/myserver.log",
+      "out_file": "/home/LogFiles/myserver-out.log",
+      "error_file": "/home/LogFiles/myserver-error.log",
+      "merge_logs": true
+    },
+    {
+      "name": "myworker",
+      "script": "./queues/worker.js",
+      "instances": 2,
+      "exec_mode": "cluster",
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "500M",
+      "log_file": "/home/LogFiles/myworker.log",
+      "out_file": "/home/LogFiles/myworker-out.log",
+      "error_file": "/home/LogFiles/myworker-error.log",
+      "merge_logs": true
+    }
+  ]
+}

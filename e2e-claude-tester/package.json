@@ -1,0 +1,14 @@
+{
+  "name": "e2e-claude-tester",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "AI-powered E2E testing bot for WhatsApp Business Automation platform",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node src/index.js",
+    "summary": "node src/reporter.js summary"
+  },
+  "dependencies": {
+    "openai": "^4.73.0"
+  }
+}

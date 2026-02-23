@@ -1,0 +1,172 @@
+[
+  {
+    "name": "DJANGO_SERVICE_KEY",
+    "value": "sk_django_oOcCi1SfeOtcAY3q5iuH-xzulCnwunYeedAZUFEinNc",
+    "slotSetting": false
+  },
+  {
+    "name": "FASTAPI_SERVICE_KEY",
+    "value": "sk_fastapi_9DoPMGmd4I-5HhX_d68me-A_rwjhz_FANd1M0dIeV6k",
+    "slotSetting": false
+  },
+  {
+    "name": "NODEJS_SERVICE_KEY",
+    "value": "sk_nodejs_mA-XH9BJLiDlmXjA9vGa7XgczT68v3CoQNrcvEx0s34",
+    "slotSetting": false
+  },
+  {
+    "name": "JWT_SECRET_KEY",
+    "value": "whatsapp-business-automation-jwt-secret-2026-change-in-production",
+    "slotSetting": false
+  },
+  {
+    "name": "JWT_SECRET",
+    "value": "whatsapp-business-automation-jwt-secret-2026-change-in-production",
+    "slotSetting": false
+  },
+  {
+    "name": "DJANGO_URL",
+    "value": "https://backeng4whatsapp-dxbmgpakhzf9bped.centralindia-01.azurewebsites.net",
+    "slotSetting": false
+  },
+  {
+    "name": "FASTAPI_URL",
+    "value": "https://fastapione-gue2c5ecc9c4b8hy.centralindia-01.azurewebsites.net",
+    "slotSetting": false
+  },
+  {
+    "name": "FAST_API_URL",
+    "value": "https://fastapione-gue2c5ecc9c4b8hy.centralindia-01.azurewebsites.net",
+    "slotSetting": false
+  },
+  {
+    "name": "NODEJS_URL",
+    "value": "http://localhost:8080",
+    "slotSetting": false
+  },
+  {
+    "name": "REDIS_URL",
+    "value": "rediss://:O6qxsVvcWHfbwdgBxb1yEDfLeBv5VBmaUAzCaJvnELM=@whatsappnuren.redis.cache.windows.net:6380",
+    "slotSetting": false
+  },
+  {
+    "name": "REDIS_PASSWORD",
+    "value": "O6qxsVvcWHfbwdgBxb1yEDfLeBv5VBmaUAzCaJvnELM=",
+    "slotSetting": false
+  },
+  {
+    "name": "OPENAI_API_KEY",
+    "value": "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",
+    "slotSetting": false
+  },
+  {
+    "name": "GOOGLE_SERVICE_ACCOUNT_BASE64",
+    "value": "ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAibnVyZW5haSIsCiAgInByaXZhdGVfa2V5X2lkIjogImNlZjRmMjU3NDYwODE2ZDI2NWNjNzUxODY0NjdhNjJjNzNjMmFiZDQiLAogICJwcml2YXRlX2tleSI6ICItLS0tLUJFR0lOIFBSSVZBVEUgS0VZLS0tLS1cbk1JSUV2Z0lCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktnd2dnU2tBZ0VBQW9JQkFRREc1WEZsb2RKazZGOUZcbjZGWmwzanFvakE1Z0Zidjl0SENIbGRIRGh6a1QxZW9XaW5SMVRxRDNtOWVvZVhnQU9ST0N1Z3ozSlNWR3ZWYVdcbk1UYlFIeUZiU0F1Tyt0dTIxUm8wOWoyVVVzQkZCbmJXOGJwK3pGdmxQREpMMTBlSitIam1rODhNTFk1R3IyWUdcbk91UHByWVRJY1VRaEkwK2VCdjU1UGkwV1o0OGVjMEp0cmRWS2ptZlpHeTdwVDQvWUtsUXVvVzhNWHJkMkZ5emlcbnhHTWgrLzFJMTl1cEhGMTlXZlB1aG9BYUlRUTlJV3BJVU5McTdyZXRGUFZibHhBREF4S1NnYTB5bStoRUFLTWVcblBIeE5jWUZYdlVNb3U3ajlLQ053MWtXYmNGTDJJVmU0OTMvSGI2dm0wM2lrZC9IT1A5aC9BNFJWQkwvYzNZSmVcbkx2TWVUTGZsQWdNQkFBRUNnZ0VBTDE2bzdid25LRHBCcXB3bHE1aE1YeVVRTFdrdnYwSlF4TEgxWmZ5WUp2VzlcbkRVWkhhMExoU21lVzZyeVhUSEpMaDhoNDJ3bkJRWUpKazNiQUo3d3FUUnV4Q1FvTTl4UDA3R1V6RUZiUERRRjNcbm4wU3VGcEhrVnduSnJzOWtiZU04SkNwUzF3TW9qZ1FySjlPeHdVOCt2eUJleWdlbmFDc2hRMDRBSGdSbkRTaVpcbnNiZGhydkxxRlUrc2lMeWMwOVVLdTU1VmRCcDZrUml6TEhVekxOT2xZbEJSVjhjeFVtc0l0Z0FvVkNESWZ5S2RcbnFlcEw3K0YyVFA5QkpSS1hBUDBmNHdTTkwxQnJ1V0F0ZTBNVzBGTHVyNnVMQ3lYb1YyZkpJdk80UW1iU002ZW9cbjdVMTJ4aWxYZlB6Um1lQXJWN1c5Tk1ZeEJ1ZFRxOW5GUmYvYkxYeFcxd0tCZ1FEc1ZBSTV3cFU1UjE5MC9Td2RcbkNVU2lCRCt0UjB3MXB5TW9DdldQZ2xoUHR3K3o5aWQ0eXZicC9JWXhlVTF3V2l6N2svZmxjRWxSOGtLTEgyU21cblpLUUMrWkNCc3BBTURGd1FBS0prK0RvMVN3WThxOE13UXRxMXlyMUxITVN6Vkx4bkZMSmN6SlNpUk92cFg0QVBcbkpuTHRUME11VXV5M0JUbU9EM21XZjJ2Rmx3S0JnUURYYzhsQks3MHJRS1FXRjFJYjhweisvSml6UFVFTEF5M0hcbnFkcCtkNjQwUmk5VE03VFdHeVQ3ZXBHbWRmZk9YLzhqT2FBSnVqbzZhaUJraWR5TTU2QXZOV2xqWmVpNlhEUDVcblI4c01QenYwY3RObmdjMUVnRmFPRWdFVUM4dFRXME8zd1JyNXpXVy8xRXo5L2RUUzc5RTd6cGR4U2t0K0VWL0JcbmJ6QnJBZFgxNHdLQmdRRFNQOWNQRGdiMlE0SXdNWURLZ0ZGWUZwR1VGa2M5d0dsdG1YcG41MTJyNWNBSnFlZnBcbjloLy9nVkxkdHY1bkEwTGJ1d09qVXVkWUNVQ2NSeHlqVUF2K1BZc0xhQkh4TmhtOWZ1TDdFeit0NUFZemVkZ1lcbkdwSTdnNWd1dC9Sald2S1dmbnBFUnhuQTE3Sk9HRkYwcVE4OEF2VlF4Q09tbS9aZFpYVVZxRno0RndLQmdRQ1lcbncxdzdmVXZQMHpHRkNGd0x2T1pjVmJYZndOclJlQnVKcW9GbGttNU9Xa1ZMOVNtUGRnZXUxNlZXSmViaXlXWWFcbkQ4M05sK0daY1k0dU95SEtOcUY1VjZHMS9KZ2JLeTBlM3l5MUxsRFFibW8reGVaSlg4WC9UZnk5dmU4WTEya1lcbmJTODNWOCtCU0lLZXhNK1dFTHlHYjJFcHpzZmdSMmxodWZqV3BxS1NpUUtCZ0d3bFVzMnFvRk8wUkYwd2MrN0RcbkFrTWRTRldiT3ZzNTFrSmhLU25rbkoyY0pCTkJGaEtYQmtEZUYvb3l2aFozQUs3Z0lVR2lEV0RBUzJQNU9CZkRcbnFoWG9leGFwek9oZEFPVXRXaFl1bzBkeEZmWGIyZnd2SStuU0pkYVcvWUxLV3pwc3hHTnRoUEtVUzZsL0lQd3Vcbnc4UUdwbHE1aE5tNzA2S1hkUTdOL1c2blxuLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLVxuIiwKICAiY2xpZW50X2VtYWlsIjogInNwcmVhZHNoZWV0QG51cmVuYWkuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLAogICJjbGllbnRfaWQiOiAiMTExOTU4Mjk2OTY4NDE4MDY4ODI4IiwKICAiYXV0aF91cmkiOiAiaHR0cHM6Ly9hY2NvdW50cy5nb29nbGUuY29tL28vb2F1dGgyL2F1dGgiLAogICJ0b2tlbl91cmkiOiAiaHR0cHM6Ly9vYXV0aDIuZ29vZ2xlYXBpcy5jb20vdG9rZW4iLAogICJhdXRoX3Byb3ZpZGVyX3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vb2F1dGgyL3YxL2NlcnRzIiwKICAiY2xpZW50X3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vcm9ib3QvdjEvbWV0YWRhdGEveDUwOS9zcHJlYWRzaGVldCU0MG51cmVuYWkuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLAogICJ1bml2ZXJzZV9kb21haW4iOiAiZ29vZ2xlYXBpcy5jb20iCn0K",
+    "slotSetting": false
+  },
+  {
+    "name": "APP_SECRET",
+    "value": "1cc11e828571e071c91f56da993bb60b",
+    "slotSetting": false
+  },
+  {
+    "name": "PASSPHRASE",
+    "value": "COOL",
+    "slotSetting": false
+  },
+  {
+    "name": "PRIVATE_KEY",
+    "value": "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: DES-EDE3-CBC,B0D23E7630934BC1\n\nBWZdSCdsCr7lM2CdwLS5fj8xER9tirpqeRhbmla6HERd8+KdkTYv7bb5maqgmo3C\nlCfHrWt/VQxjM6BLXTlD7dYHlWnISLsDEoehKpR4wMAGSYSS0qTszwU7XcqW6DCb\nQi1PFWPxb10sEfndxhJR9itKKuFll8JgdSXiqiv7JNMtnzeG0gnvhNwz2wMlmRcm\nOknlRqvSZ1fJEB75wYJSj8aOeyP4RQaZACF/GhzlTS3IxsBFx1DPijLYvO354v+a\nMKG4xdGPCCfgqOJzEpc7VkKB9Y9bGvdHjQz9+LrGtuTqeVGrtbJXP97dHEgMzuyE\nKbAx2nmVgcENAU6fgPqnWKK22Hcj/kbK0CvjWDr6IyMrTvFVHHL5F/jCXvJDaPjD\noyRQlSMI2s3c3L2UmjtMQYPlX5BKVUgEwt+ZL/tE2AaOXDOuzNEQ27zM7Wb2TJAO\nmDnZBM6AMLEdTySO2y6gVnkEuQemTneeXtEZEHrj4B2PQrl0HV+p6cCfdLZ3dZ1v\nGZFO/YGgTmExBIuyuNcqPmJUcwosVTdL4QF35Qaa3f8f/pfiYHqsBjCeNHjgJn/o\nia08Vgqitq2R58GvQgrg4bP+B8szflAA41fvQKo/+EuFzvcET6EZHlmi0iRHMlrm\nQ2ICYrq7czlTspRxOuE+t+kGzUkLnaIOyqUv757NPngG0qbOGRE9rhX7UpZ8gJ/m\n27KGHyi7z++/AXnxSX53C9RENvTwEqd6Jslf2iOfkvFuHBudUqfczKxCkF+tCtas\n/A3rFjPPaFW5NrR5YbVjMhfJK6KyZiG6c7Dg9gYZOYblb7iwT21DBcoiKvSziEV6\ngI2ECOy7pbwBs6Y2N225vbhX+7wrFKBfC30No5DveIsgRb0YbOuCEnlh6z48BEVc\npIte9+8wrDY0/Izp38HK3M0ZQzkzKOCdTkAMaD5AhJ4dZ26Q1EaagCwzikoqJ/o4\nu/o3wOKWuxDsXEGsn3GKS28YXGzCw2asJ52bnUih8mHEvcCx+R1ZVuCVHt7IX/80\nEzP5BGMjz1E0AREAuWpln0aKhxeHe9tSP9I88/Giem32kqMl/MgsVGZpZCVGCmLp\nrEYPa1KEiPHcv7XuIlXGs/6QgtP+LJRp3a3zL1/2FuVPo4xCDF0yTClz8s7KYHDq\nlDJhFTU8loAB+6kYrcHFTtcDpA+gc5zGg/ZZfiunEap23ZOTx8yBW3c+A3Y/LMUO\nJ8Ml4ib2pyOAyM1ux9nXtzGoR4LBJTMeVqQ8+TS7sPHXpqYHweSm+6I4GJudwTKk\n6lifms8L2eHbnxr446MOCa/UhGyHF5lNQpD+9vQ5YAL0O2W2RXjj0FV4UtbfudH0\nh1B2QwiNzopMoIUW5fFQCvdXwyhEddIqkLxuRBxlRSJJZ9NlgKX2J5OWfwVOpPVm\n91812rr4ijEZewupEHGILoeoCvi+5pJDiqt/y48i6wy59oESnOyQVAf2S6qaB5kC\nPLSzv/pqSfc/7pDzqCEfW1GEUy3sBqDXg3v/DVUsXrBBfuL7GaexdaqONQyu+Jrh\npHPvuFCH/EwRaPlUPyt759FXJOEjtdXK7w2cppfUdB+iajDb1OK84Q==\n-----END RSA PRIVATE KEY-----",
+    "slotSetting": false
+  },
+  {
+    "name": "PUBLIC_KEY",
+    "value": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxwfv5RnUnfqupa7iurGR\nBSWOw0wQ5aAvAwea7pYAdrv8d95E+FB0UXzxWy0Ip402YCtvY3uyUIwMAq8zENgq\nQZj4UGEmEVOEqu/2oozPhsUbWXg7nkUVFkJN8awUp13E7zpY6uJ1UD342KMCkJ2Z\nJEUBBeS51ugt0IoDDkW1whdkc83ewd/AJ4R77rI2jIyRjjZAy1RaHr6EG74KJimM\nf1dMiwfowV/JRrdQo/J2UWKU7rI4hKyzzPUK4fMuTToSt+eW0JDmYNPWqKJ033z8\nlZsvezuMk6SKwnYwqEzS5lhb5aELn/e8Og3yFRqwN8xzVUIM6vk1W1rjIvJDok/I\nRQIDAQAB\n-----END PUBLIC KEY-----",
+    "slotSetting": false
+  },
+  {
+    "name": "ANALYTICS_DB_HOST",
+    "value": "nurenaistore.postgres.database.azure.com",
+    "slotSetting": false
+  },
+  {
+    "name": "ANALYTICS_DB_PORT",
+    "value": "5432",
+    "slotSetting": false
+  },
+  {
+    "name": "ANALYTICS_DB_NAME",
+    "value": "nurenpostgres_Whatsapp",
+    "slotSetting": false
+  },
+  {
+    "name": "ANALYTICS_DB_USER",
+    "value": "nurenai",
+    "slotSetting": false
+  },
+  {
+    "name": "ANALYTICS_DB_PASSWORD",
+    "value": "Biz1nurenWar*",
+    "slotSetting": false
+  },
+  {
+    "name": "DB_HOST",
+    "value": "nurenaistore.postgres.database.azure.com",
+    "slotSetting": false
+  },
+  {
+    "name": "DB_PORT",
+    "value": "5432",
+    "slotSetting": false
+  },
+  {
+    "name": "DB_NAME",
+    "value": "nurenpostgres_Whatsapp",
+    "slotSetting": false
+  },
+  {
+    "name": "DB_USER",
+    "value": "nurenai",
+    "slotSetting": false
+  },
+  {
+    "name": "DB_PASSWORD",
+    "value": "Biz1nurenWar*",
+    "slotSetting": false
+  },
+  {
+    "name": "SIMULATOR_WEBHOOK_URL",
+    "value": "http://localhost:8080/webhook",
+    "slotSetting": false
+  },
+  {
+    "name": "SIMULATOR_PHONE_NUMBER_ID",
+    "value": "241683569037594",
+    "slotSetting": false
+  },
+  {
+    "name": "TEST_PHONE_NUMBER_ID",
+    "value": "241683569037594",
+    "slotSetting": false
+  },
+  {
+    "name": "SIMULATOR_USER_PHONE",
+    "value": "919876543210",
+    "slotSetting": false
+  },
+  {
+    "name": "TEST_USER_PHONE",
+    "value": "919876543210",
+    "slotSetting": false
+  },
+  {
+    "name": "SIMULATOR_USER_NAME",
+    "value": "Test User",
+    "slotSetting": false
+  },
+  {
+    "name": "TEST_USER_NAME",
+    "value": "Test User",
+    "slotSetting": false
+  }
+]

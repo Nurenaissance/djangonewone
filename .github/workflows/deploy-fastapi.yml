@@ -1,0 +1,92 @@
+name: Deploy FastAPI to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'fastAPIWhatsapp_withclaude/**'
+      - '.github/workflows/deploy-fastapi.yml'
+  workflow_dispatch:  # Manual trigger
+
+env:
+  AZURE_WEBAPP_NAME: fastapione-gue2c5ecc9c4b8hy
+  PYTHON_VERSION: '3.11'
+  WORKING_DIRECTORY: './fastAPIWhatsapp_withclaude'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: 'production'
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: '${{ env.WORKING_DIRECTORY }}/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests (if available)
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          # Add your test commands here
+          # python -m pytest tests/
+          echo "Tests would run here"
+
+      - name: Create deployment package
+        run: |
+          cd ${{ env.WORKING_DIRECTORY }}
+          zip -r ../fastapi-deploy.zip . \
+            -x "*.git*" \
+            -x "*__pycache__*" \
+            -x "*.pyc" \
+            -x ".env" \
+            -x "venv/*"
+
+      - name: Deploy to Azure Web App
+        id: deploy
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_FASTAPI_PUBLISH_PROFILE }}
+          package: './fastapi-deploy.zip'
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to complete..."
+          sleep 30
+
+          # Health check
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/health)
+
+          if [ $HTTP_STATUS -eq 200 ]; then
+            echo "✅ Deployment successful - Health check passed"
+          else
+            echo "❌ Health check failed with status $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Create deployment summary
+        run: |
+          echo "### FastAPI Deployment Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Name:** ${{ env.AZURE_WEBAPP_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
+          echo "- **Python Version:** ${{ env.PYTHON_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Health check passed" >> $GITHUB_STEP_SUMMARY

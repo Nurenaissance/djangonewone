@@ -1,0 +1,53 @@
+======================================================================
+SERVICE AUTHENTICATION KEYS - GENERATED 2026-01-06
+======================================================================
+
+⚠️  IMPORTANT: These keys are SECRET - Do NOT commit to git!
+
+Copy ALL THREE keys to .env file in EACH service:
+- Django (whatsapp_latest_final_withclaude)
+- FastAPI (fastAPIWhatsapp_withclaude)
+- Node.js (whatsapp_bot_server_withclaude)
+
+----------------------------------------------------------------------
+DJANGO_SERVICE_KEY=sk_django_oOcCi1SfeOtcAY3q5iuH-xzulCnwunYeedAZUFEinNc
+FASTAPI_SERVICE_KEY=sk_fastapi_9DoPMGmd4I-5HhX_d68me-A_rwjhz_FANd1M0dIeV6k
+NODEJS_SERVICE_KEY=sk_nodejs_mA-XH9BJLiDlmXjA9vGa7XgczT68v3CoQNrcvEx0s34
+----------------------------------------------------------------------
+
+Also add shared JWT secret (must be same across all services):
+JWT_SECRET_KEY=your-shared-jwt-secret-key-change-this-in-production
+
+And service URLs for cross-service calls:
+DJANGO_URL=http://localhost:8000
+FASTAPI_URL=http://localhost:8001
+NODEJS_URL=http://localhost:3000
+
+======================================================================
+NEXT STEPS AFTER RESTART
+======================================================================
+
+When you restart and continue:
+
+1. ✅ COMPLETED:
+   - Generated service authentication keys
+   - Created service_auth.py utility
+
+2. 🔄 IN PROGRESS:
+   - Background analysis of existing service calls running
+
+3. ⏭️ NEXT TO DO:
+   - Create Python service client utility
+   - Create JavaScript service client utility
+   - Update FastAPI middleware
+   - Update Django middleware
+   - Update Node.js middleware
+   - Update all service-to-service API calls
+   - Create .env templates
+   - Test before enabling JWT
+
+4. 📝 RESUME COMMAND:
+   Tell Claude: "Continue implementing the Service Authentication Strategy
+   from where we left off"
+
+======================================================================

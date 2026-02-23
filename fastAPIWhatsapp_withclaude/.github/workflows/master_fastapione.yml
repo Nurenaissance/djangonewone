@@ -1,0 +1,38 @@
+# Build and deploy Python app to Azure Web App - fastapione
+name: Build and deploy Python app to Azure Web App - fastapione
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies to local packages directory
+        run: |
+          pip install -r requirements.txt --target=".python_packages/lib/site-packages"
+
+      - name: Zip deployment package
+        run: |
+          zip -r deploy.zip . -x ".git/*" -x "__pycache__/*" -x "*.pyc" -x ".env" -x "venv/*" -x "antenv/*"
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'fastapione'
+          slot-name: 'Production'
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_3FA1B3E60E24409480DC4812EF09D1EE }}
+          package: deploy.zip

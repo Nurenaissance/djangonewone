@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow all HTTPS connections -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- Azure backend domains -->
+        <domain includeSubdomains="true">azurewebsites.net</domain>
+
+        <!-- Nuren AI domain -->
+        <domain includeSubdomains="true">nuren.ai</domain>
+    </domain-config>
+</network-security-config>

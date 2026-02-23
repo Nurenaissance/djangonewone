@@ -1,0 +1,194 @@
+import axios from "axios";
+import { userSessions, io } from "./server.js";
+import { getImageAndUploadToBlob } from "./helpers/handle-media.js"
+import { saveMessage } from "./helpers/misc.js";
+import { getIndianCurrentTime } from "./utils.js";
+import { normalizePhone } from "./normalize.js";
+import { trackMessageSend } from "./analytics/tracker.js";
+import { djangoURL } from "./mainwebhook/snm.js";
+
+export async function sendMessage(phoneNumber, business_phone_number_id, messageData, access_token = null, tenant) {
+
+    const key = phoneNumber + business_phone_number_id;
+    const userSession = await userSessions.get(key);
+    if (!userSession && access_token == null) {
+        console.error("User session not found and no access token provided.");
+        return { success: false, error: "User session or access token missing." };
+    }
+
+    const url = `https://graph.facebook.com/v18.0/${business_phone_number_id}/messages`;
+    console.log('Sending message to:', phoneNumber);
+
+    phoneNumber = String(phoneNumber).trim();
+    phoneNumber = normalizePhone(phoneNumber);
+
+
+    //console.log('Message Data:', JSON.stringify(messageData, null, 7));
+
+    if (access_token == null) access_token = userSession.accessToken;
+    if (tenant == null) tenant = userSession.tenant
+    try {
+        messageData["messaging_product"] = "whatsapp"
+        messageData["recipient_type"] = "individual"
+        messageData["to"] = phoneNumber
+        console.log("Sending Message")
+        const response = await axios.post(
+            url, messageData,
+            {
+                headers: { Authorization: `Bearer ${access_token}` }
+            }
+        );
+        if (response.data && response.data.messages && response.data.messages.length > 0) {
+            console.log('Message sent successfully:', response.data);
+            console.log("Tenant sent in send-message: ", tenant)
+
+            const messageId = response.data.messages[0].id;
+
+            // Track analytics for this message
+            try {
+                // Fetch contact name from Django (async, don't block)
+                let recipientName = null;
+                try {
+                    const contactResponse = await axios.get(
+                        `${djangoURL}/contacts/phone/${phoneNumber}/`,
+                        {
+                            headers: { 'X-Tenant-Id': tenant },
+                            timeout: 2000 // 2 second timeout
+                        }
+                    );
+                    recipientName = contactResponse.data?.name || null;
+                } catch (contactError) {
+                    // Contact not found or error - not critical, continue
+                    console.log('ℹ️ Could not fetch contact name for analytics');
+                }
+
+                await trackMessageSend({
+                    tenantId: tenant,
+                    messageId: messageId,
+                    templateId: messageData?.template?.name || null,
+                    templateName: messageData?.template?.name || null,
+                    recipientPhone: phoneNumber,
+                    recipientName: recipientName,
+                    contactId: null,
+                    campaignId: null,
+                    broadcastGroupId: null,
+                    messageType: messageData.type || 'text',
+                    conversationCategory: 'marketing',
+                    cost: null, // Will use default cost based on category
+                    timestamp: new Date()
+                });
+            } catch (analyticsError) {
+                console.error('❌ [Analytics] Failed to track message send:', analyticsError);
+                // Don't fail the message send if analytics tracking fails
+            }
+
+            let mediaURLPromise = Promise.resolve(null);
+            const mediaID = messageData?.video?.id || messageData?.audio?.id || messageData?.image?.id
+            // if (mediaID != undefined) {
+            //     mediaURLPromise = await getImageAndUploadToBlob(mediaID, access_token).then(mediaURL => {
+            //         if (messageData?.video?.id) {
+            //             messageData.video.id = mediaURL;
+            //         } else if (messageData?.audio?.id) {
+            //             messageData.audio.id = mediaURL;
+            //         } else if (messageData?.image?.id) {
+            //             messageData.image.id = mediaURL;
+            //         }
+            //     })
+            // }
+
+            let timestamp = await getIndianCurrentTime()
+
+            // console.log("MESSAGE DATA: ", JSON.stringify(messageData, null, 4))
+            io.emit('node-message', {
+                message: messageData,
+                phone_number_id: business_phone_number_id,
+                contactPhone: phoneNumber,
+                time: timestamp
+            });
+            console.log("Emitted Node Message")
+
+            // Save message to database with proper format
+            let formattedConversation;
+            const msgType = messageData.type || 'text';
+
+            if (msgType === 'text') {
+                formattedConversation = [{
+                    text: messageData.text?.body || '',
+                    sender: "bot",
+                    message_type: "text"
+                }];
+            } else if (msgType === 'image') {
+                formattedConversation = [{
+                    text: messageData.image?.caption || '',
+                    sender: "bot",
+                    message_type: "image",
+                    media_url: messageData.image?.link || messageData.image?.id || '',
+                    media_caption: messageData.image?.caption || ''
+                }];
+            } else if (msgType === 'video') {
+                formattedConversation = [{
+                    text: messageData.video?.caption || '',
+                    sender: "bot",
+                    message_type: "video",
+                    media_url: messageData.video?.link || messageData.video?.id || '',
+                    media_caption: messageData.video?.caption || ''
+                }];
+            } else if (msgType === 'audio') {
+                formattedConversation = [{
+                    text: '[Audio message]',
+                    sender: "bot",
+                    message_type: "audio",
+                    media_url: messageData.audio?.link || messageData.audio?.id || ''
+                }];
+            } else if (msgType === 'document') {
+                formattedConversation = [{
+                    text: messageData.document?.filename || '[Document]',
+                    sender: "bot",
+                    message_type: "document",
+                    media_url: messageData.document?.link || messageData.document?.id || '',
+                    media_filename: messageData.document?.filename || '',
+                    media_caption: messageData.document?.caption || ''
+                }];
+            } else if (msgType === 'interactive') {
+                // Handle button/list messages
+                const interactiveBody = messageData.interactive?.body?.text || '';
+                formattedConversation = [{
+                    text: interactiveBody,
+                    sender: "bot",
+                    message_type: "text"
+                }];
+            } else if (msgType === 'template') {
+                formattedConversation = [{
+                    text: `[Template: ${messageData.template?.name || 'Unknown'}]`,
+                    sender: "bot",
+                    message_type: "text"
+                }];
+            } else {
+                // Fallback for unknown types
+                formattedConversation = [{
+                    text: JSON.stringify(messageData),
+                    sender: "bot",
+                    message_type: msgType
+                }];
+            }
+
+            try {
+                await saveMessage(normalizePhone(phoneNumber), business_phone_number_id, formattedConversation, tenant, timestamp, 0, { messageId });
+            } catch (saveError) {
+                console.error("❌ Failed to save outbound message:", saveError.message);
+                // Don't fail the send if save fails, but log it
+            }
+
+            await mediaURLPromise
+            // if(userSession) console.log("Current Node after sending message: ", userSession.currNode, "Next Node after sending message: ", userSession.nextNode)
+            return { success: true, data: response.data };
+
+        } else {
+            throw new Error("Message not sent");
+        }
+
+    } catch (error) {
+        console.error('Failed to send message:', error.response ? error.response.data : error.message);
+        return { success: false, error: error.response ? error.response.data : error.message };
+    }
+}
