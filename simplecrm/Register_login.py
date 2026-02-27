@@ -21,6 +21,12 @@ from django.http import JsonResponse
 from django.db import IntegrityError, transaction
 from django.contrib.auth import get_user_model
 import os
+import hashlib
+from django.utils import timezone
+from django.core.mail import send_mail
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.conf import settings
 def generate_symmetric_key():
     return os.urandom(32)   # ✅ bytes
 
@@ -169,7 +175,13 @@ def change_password(request):
             u = CustomUser.objects.get(username = username)
             print(u)
             if new_password:
+                try:
+                    validate_password(new_password, u)
+                except ValidationError as e:
+                    return JsonResponse({'error': e.messages}, status=400)
                 u.set_password(new_password)
+                u.must_change_password = False
+                u.password_changed_at = timezone.now()
                 u.save()
                 return JsonResponse({'message': 'Password changed successfully'}, status=200)
             elif phone:
@@ -197,7 +209,6 @@ def verifyUser(request):
 
 import jwt
 import datetime
-from django.conf import settings
 
 class LoginView(APIView):
     def post(self, request):
@@ -268,6 +279,7 @@ class LoginView(APIView):
                     'user_id': user_id,
                     'role': role,
                     'tier': tier,
+                    'must_change_password': bool(getattr(user, "must_change_password", False)),
                     'msg': 'Login successful'
                 }
                 print("user data", response_data)
@@ -279,6 +291,176 @@ class LoginView(APIView):
         except Exception as e:
             logger.error(f"Login error for {request.data.get('username', 'unknown')}: {str(e)}")
             return Response({'msg': f'Login failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _get_password_reset_url(token: str, email: str) -> str:
+    base_url = settings.PASSWORD_RESET_URL
+    if not base_url:
+        raise ValueError("PASSWORD_RESET_URL is not configured")
+    joiner = "&" if "?" in base_url else "?"
+    return f"{base_url}{joiner}token={token}&email={email}"
+
+
+@csrf_exempt
+def forgot_password(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        email = (data.get('email') or '').strip().lower()
+        username = (data.get('username') or '').strip()
+
+        if not (email or username):
+            return JsonResponse({'msg': 'Email or username is required'}, status=400)
+
+        user = None
+        if email:
+            user = CustomUser.objects.filter(email__iexact=email).first()
+        if not user and username:
+            user = CustomUser.objects.filter(username=username).first()
+
+        # Always return 200 to avoid account enumeration
+        if not user or not user.email:
+            return JsonResponse({'msg': 'If the account exists, a reset email has been sent'}, status=200)
+
+        from simplecrm.models import PasswordResetToken
+
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = _hash_reset_token(raw_token)
+        expires_at = timezone.now() + datetime.timedelta(hours=settings.PASSWORD_RESET_TOKEN_EXPIRY_HOURS)
+
+        PasswordResetToken.objects.create(
+            user=user,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        )
+
+        try:
+            reset_url = _get_password_reset_url(raw_token, user.email)
+        except ValueError as e:
+            logger.error(str(e))
+            return JsonResponse({'msg': 'Password reset is not configured'}, status=500)
+
+        subject = "Reset your NurenAI password"
+        message = (
+            f"Hello {user.username},\n\n"
+            f"Use the link below to reset your password:\n{reset_url}\n\n"
+            f"This link will expire in {settings.PASSWORD_RESET_TOKEN_EXPIRY_HOURS} hours.\n"
+            f"If you did not request this, you can ignore this email."
+        )
+        send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+
+        return JsonResponse({'msg': 'If the account exists, a reset email has been sent'}, status=200)
+
+    except Exception as e:
+        logger.error(f"Forgot password error: {str(e)}")
+        return JsonResponse({'msg': 'Failed to process request'}, status=500)
+
+
+@csrf_exempt
+def reset_password(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        token = (data.get('token') or '').strip()
+        email = (data.get('email') or '').strip().lower()
+        new_password = data.get('new_password')
+
+        if not (token and email and new_password):
+            return JsonResponse({'msg': 'Token, email, and new_password are required'}, status=400)
+
+        from simplecrm.models import PasswordResetToken
+
+        token_hash = _hash_reset_token(token)
+        reset_entry = PasswordResetToken.objects.select_related("user").filter(
+            token_hash=token_hash,
+            used_at__isnull=True
+        ).first()
+
+        if not reset_entry or reset_entry.user.email.lower() != email:
+            return JsonResponse({'msg': 'Invalid or expired token'}, status=400)
+
+        if reset_entry.expires_at < timezone.now():
+            return JsonResponse({'msg': 'Token has expired'}, status=400)
+
+        user = reset_entry.user
+        try:
+            validate_password(new_password, user)
+        except ValidationError as e:
+            return JsonResponse({'msg': 'Password validation failed', 'errors': e.messages}, status=400)
+
+        user.set_password(new_password)
+        user.must_change_password = False
+        user.password_changed_at = timezone.now()
+        user.save(update_fields=["password", "must_change_password", "password_changed_at"])
+
+        reset_entry.used_at = timezone.now()
+        reset_entry.save(update_fields=["used_at"])
+
+        return JsonResponse({'msg': 'Password reset successful'}, status=200)
+
+    except Exception as e:
+        logger.error(f"Reset password error: {str(e)}")
+        return JsonResponse({'msg': 'Failed to reset password'}, status=500)
+
+
+@csrf_exempt
+def force_password_reset(request):
+    if request.method != 'POST':
+        return JsonResponse({'msg': 'Method not allowed'}, status=405)
+
+    # Require admin user or service request
+    if not getattr(request, "is_service_request", False):
+        user = getattr(request, "user", None)
+        if not user or user.role != CustomUser.ADMIN:
+            return JsonResponse({'msg': 'Forbidden'}, status=403)
+
+    try:
+        data = json.loads(request.body) if request.body else {}
+        tenant_id = (data.get('tenant_id') or '').strip()
+        send_emails = bool(data.get('send_emails', True))
+
+        qs = CustomUser.objects.all()
+        if tenant_id:
+            qs = qs.filter(tenant_id=tenant_id)
+
+        updated = qs.update(must_change_password=True)
+
+        if send_emails:
+            for user in qs.exclude(email__isnull=True).exclude(email__exact=""):
+                try:
+                    raw_token = secrets.token_urlsafe(32)
+                    token_hash = _hash_reset_token(raw_token)
+                    expires_at = timezone.now() + datetime.timedelta(hours=settings.PASSWORD_RESET_TOKEN_EXPIRY_HOURS)
+                    from simplecrm.models import PasswordResetToken
+                    PasswordResetToken.objects.create(
+                        user=user,
+                        token_hash=token_hash,
+                        expires_at=expires_at,
+                    )
+                    reset_url = _get_password_reset_url(raw_token, user.email)
+                    subject = "Action required: reset your NurenAI password"
+                    message = (
+                        f"Hello {user.username},\n\n"
+                        f"Your password must be reset. Use the link below:\n{reset_url}\n\n"
+                        f"This link will expire in {settings.PASSWORD_RESET_TOKEN_EXPIRY_HOURS} hours."
+                    )
+                    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+                except Exception as e:
+                    logger.error(f"Failed sending reset email to {user.email}: {e}")
+
+        return JsonResponse({'msg': 'Password reset required for users', 'updated': updated}, status=200)
+
+    except Exception as e:
+        logger.error(f"Force password reset error: {str(e)}")
+        return JsonResponse({'msg': 'Failed to update users'}, status=500)
 
 class LogoutView(APIView):
     def post(self, request):

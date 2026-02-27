@@ -20,6 +20,8 @@ EXCLUDED_PATHS = [
     "/register-tenant/",
     "/register-unified/",
     "/register-google/",
+    "/forgot-password/",
+    "/reset-password/",
     "/validate-invite-code/",
     "/oauth/token/",
     "/health/",
@@ -28,6 +30,12 @@ EXCLUDED_PATHS = [
     "/admin/",  # Django admin uses its own auth
     "/interviews/import-from-chat/",  # Public endpoint for chat import
     "/interviews/public/submit/",  # Public interview submission from web form
+]
+
+ALLOWED_WHEN_PASSWORD_CHANGE_REQUIRED = [
+    "/reset-password/",
+    "/forgot-password/",
+    "/logout/",
 ]
 
 # Origins that bypass authentication (trusted internal services)
@@ -178,6 +186,13 @@ class JWTAuthMiddleware:
                     {"error": "user_not_found"},
                     status=401
                 )
+
+            if getattr(request.user, "must_change_password", False):
+                if not any(request.path.startswith(x) for x in ALLOWED_WHEN_PASSWORD_CHANGE_REQUIRED):
+                    return JsonResponse(
+                        {"error": "password_change_required"},
+                        status=403
+                    )
 
             return self.get_response(request)
 

@@ -25,8 +25,20 @@ class CustomUser(AbstractUser):
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     job_profile = models.CharField(max_length=255, blank=True, null=True)
+    must_change_password = models.BooleanField(default=False)
+    password_changed_at = models.DateTimeField(blank=True, null=True)
 
     def __str__(self):
         return self.username
-    
 
+
+class PasswordResetToken(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="password_reset_tokens")
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return f"PasswordResetToken(user={self.user_id}, used={bool(self.used_at)})"
+    

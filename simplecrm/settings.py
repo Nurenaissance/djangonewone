@@ -43,6 +43,19 @@ OAUTH_CLIENTS = {
         "redirect_uri": "https://crm.com/oauth/callback"
     }
 }
+
+# Email configuration (for password reset)
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@nuren.ai")
+
+# Password reset settings
+PASSWORD_RESET_URL = os.getenv("PASSWORD_RESET_URL", "")
+PASSWORD_RESET_TOKEN_EXPIRY_HOURS = int(os.getenv("PASSWORD_RESET_TOKEN_EXPIRY_HOURS", "2"))
 # Application definition
 
 INSTALLED_APPS = [
