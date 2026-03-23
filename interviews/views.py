@@ -68,6 +68,108 @@ def apply_tab_filter(queryset, request):
     return queryset.filter(**filters), "tab_whatsapp"
 
 
+def should_use_whatsapp_chat_aggregate(request):
+    tab = request.query_params.get('tab')
+    flow_name = request.query_params.get('flow_name')
+    interview_type = request.query_params.get('interview_type')
+
+    if tab:
+        return tab == 'whatsapp'
+    if flow_name:
+        return flow_name == 'interviewdrishtee'
+    if interview_type:
+        return False
+    return True
+
+
+def build_whatsapp_chat_aggregate_rows(tenant_id, phone_filter=None, status_filter=None):
+    conversations = Conversation.objects.filter(
+        tenant_id=tenant_id,
+        source='whatsapp'
+    ).order_by('contact_id', 'date_time', 'id')
+
+    if phone_filter:
+        normalized_phone = extract_phone_number(phone_filter)
+        conversations = conversations.filter(contact_id__icontains=normalized_phone)
+
+    grouped_conversations = defaultdict(list)
+    for conversation in conversations:
+        phone = extract_phone_number(conversation.contact_id)
+        if phone:
+            grouped_conversations[phone].append(conversation)
+
+    contact_names = {}
+    for contact in Contact.objects.filter(tenant_id=tenant_id).values('phone', 'name'):
+        if contact['phone'] and contact['name']:
+            contact_names[extract_phone_number(contact['phone'])] = contact['name']
+
+    latest_status_by_phone = {}
+    latest_rows = InterviewResponse.objects.filter(
+        tenant_id=tenant_id,
+        flow_name='interviewdrishtee'
+    ).order_by('phone_no', '-timestamp')
+    for row in latest_rows:
+        latest_status_by_phone.setdefault(row.phone_no, row.status)
+
+    aggregated_rows = []
+    synthetic_id = 1
+
+    for phone, phone_conversations in grouped_conversations.items():
+        extracted = extract_session_data(phone_conversations)
+
+        has_any_audio = any([
+            extracted.get('name_audio'),
+            extracted.get('address_audio'),
+            extracted.get('calibration_audio'),
+            extracted.get('question1'),
+            extracted.get('question2'),
+            extracted.get('question3'),
+            extracted.get('question4'),
+        ])
+        if not has_any_audio:
+            continue
+
+        latest_timestamp = max(
+            [conv.date_time for conv in phone_conversations if conv.date_time],
+            default=None
+        )
+
+        status_value = latest_status_by_phone.get(phone) or ('completed' if extracted.get('calibration_audio') else 'pending')
+        if status_filter and status_value != status_filter:
+            continue
+
+        candidate_name = (
+            contact_names.get(phone)
+            or extracted.get('name')
+            or phone
+        )
+
+        interview_response = InterviewResponse(
+            phone_no=phone,
+            tenant_id=tenant_id,
+            flow_name='interviewdrishtee',
+            timestamp=latest_timestamp,
+            candidate_name=candidate_name,
+            name=extracted.get('name') or candidate_name,
+            name_audio=extracted.get('name_audio') or '',
+            address=extracted.get('address') or '',
+            address_audio=extracted.get('address_audio') or '',
+            calibration=extracted.get('calibration_text') or '',
+            calibration_audio=extracted.get('calibration_audio') or '',
+            status=status_value,
+            question1=extracted.get('question1') or '',
+            question2=extracted.get('question2') or '',
+            question3=extracted.get('question3') or '',
+            question4=extracted.get('question4') or '',
+        )
+        interview_response.id = synthetic_id
+        synthetic_id += 1
+        aggregated_rows.append(interview_response)
+
+    aggregated_rows.sort(key=lambda row: row.timestamp or datetime.min, reverse=True)
+    return aggregated_rows
+
+
 class InterviewResponseListView(generics.ListAPIView):
     """
     GET /interviews/responses/
@@ -75,6 +177,28 @@ class InterviewResponseListView(generics.ListAPIView):
     Requires X-Tenant-Id header
     """
     serializer_class = InterviewResponseSerializer
+
+    def list(self, request, *args, **kwargs):
+        tenant_id = request.headers.get('X-Tenant-Id') or request.headers.get('X-Tenant-ID')
+        if not tenant_id:
+            return Response([])
+
+        if should_use_whatsapp_chat_aggregate(request):
+            phone_no = request.query_params.get('phone_no')
+            status_filter = request.query_params.get('status')
+            limit = int(request.query_params.get('limit', 50))
+            offset = int(request.query_params.get('offset', 0))
+
+            aggregated_rows = build_whatsapp_chat_aggregate_rows(
+                tenant_id=tenant_id,
+                phone_filter=phone_no,
+                status_filter=status_filter
+            )
+            page_rows = aggregated_rows[offset:offset + limit]
+            serializer = self.get_serializer(page_rows, many=True)
+            return Response(serializer.data)
+
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         tenant_id = self.request.headers.get('X-Tenant-Id') or self.request.headers.get('X-Tenant-ID')

@@ -98,6 +98,7 @@ urlpatterns = [
     path('whatsapp_convo_get/<str:contact_id>/',inviews.view_conversation, name='get_whatsapp_convo'),
     path('contacts_of_account/<int:account_id>/',cviews.ContactByAccountAPIView.as_view(), name='contacts-by-account'),
     path('contacts-by-phone/<int:phone>/', cviews.ContactByPhoneAPIView.as_view(), name='contacts-by-phone'),
+    path('contacts-search/', cviews.ContactSearchAPIView.as_view(), name='contacts-search'),
     path('delete-contact/<str:phone_number>/', cviews.delete_contact_by_phone, name='delete_contact_by_phone'),
     path('topic-modelling/<str:conversation_id>/', topicviews.topic_modelling_view, name='topic_modelling'),
     path('get-topic-modelling/<int:contact_id>/', topicviews.TopicModellingView.as_view(), name='topic-modelling-get'),

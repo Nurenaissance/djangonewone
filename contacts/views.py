@@ -17,6 +17,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils.timezone import make_aware
 from django.utils import timezone
+from django.db.models import Q
 from helpers.tables import get_db_connection
 from whatsapp_chat.models import WhatsappTenantData
 from .tasks import update_contact_last_seen
@@ -266,7 +267,57 @@ class ContactByPhoneAPIView(ListCreateAPIView):
                 {"error": "An error occurred while processing the response."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
+
+
+class ContactSearchAPIView(APIView):
+    """
+    Search contacts within the current tenant by phone or name.
+    Returns the best matches ordered by recent activity.
+    """
+
+    def get(self, request, *args, **kwargs):
+        tenant_id = request.headers.get('X-Tenant-Id')
+        query = (request.query_params.get('q') or '').strip()
+
+        if not tenant_id:
+            return Response(
+                {'error': 'X-Tenant-Id header is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not query:
+            return Response(
+                {'error': 'Query parameter q is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        normalized_phone = ''.join(ch for ch in query if ch.isdigit())
+        filters = Q(name__icontains=query)
+
+        if normalized_phone:
+            filters |= Q(phone__icontains=normalized_phone)
+
+        contacts = Contact.objects.filter(
+            tenant_id=tenant_id
+        ).filter(
+            filters
+        ).order_by(
+            '-last_replied', '-last_seen', '-last_delivered', '-createdOn'
+        )[:20]
+
+        serializer = ContactSerializer(contacts, many=True)
+        data = serializer.data
+
+        for item in data:
+            if 'customField' in item and item['customField'] is not None:
+                custom_fields = item.pop('customField')
+                item.update(custom_fields)
+
+        return Response({
+            'count': len(data),
+            'contacts': data
+        }, status=status.HTTP_200_OK)
+
 
 class ContactByTenantAPIView(CreateAPIView):
     serializer_class = ContactSerializer
@@ -480,4 +531,3 @@ def check_task_status(request, task_id):
     except Exception as e:
         logger.error(f"Error checking task status: {e}")
         return JsonResponse({"error": "Could not retrieve task status"}, status=500)
-

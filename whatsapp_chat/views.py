@@ -1,6 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import json, requests
+import os
 from dynamic_entities.views import create_dynamic_model, createDynamicModel
 from django.db import DatabaseError, transaction
 from dynamic_entities.views import DynamicModelListView
@@ -469,6 +470,53 @@ def reset_fastapi_cache(business_phone_number_id=None):
             print("Reset FastAPI cache non-JSON response:", response.status_code, response.text)
     except Exception as e:
         print("Error calling FastAPI:", e)
+
+
+def reset_botserver_sessions(business_phone_number_id, tenant_id=None):
+    try:
+        if not business_phone_number_id:
+            return {
+                "success": False,
+                "message": "Missing business_phone_number_id for botserver reset"
+            }
+
+        botserver_url = (
+            os.getenv("NODEJS_BOT_URL")
+            or os.getenv("WHATSAPP_BOT_SERVER_URL")
+            or "https://whatsappbotserver.azurewebsites.net"
+        ).rstrip("/")
+
+        payload = {
+            "business_phone_number_id": str(business_phone_number_id),
+            "invalidate_cache": True
+        }
+        if tenant_id:
+            payload["tenant_id"] = str(tenant_id)
+
+        response = requests.post(
+            f"{botserver_url}/api/tenant-control/reset-session",
+            json=payload,
+            timeout=15
+        )
+
+        try:
+            result = response.json()
+        except ValueError:
+            result = {"raw": response.text}
+
+        print("Reset botserver sessions:", response.status_code, result)
+
+        return {
+            "success": response.status_code == 200,
+            "status_code": response.status_code,
+            "response": result
+        }
+    except Exception as e:
+        print("Error calling botserver reset-session:", e)
+        return {
+            "success": False,
+            "message": str(e)
+        }
 
 
 @csrf_exempt
@@ -1373,12 +1421,23 @@ def reset_automation(request):
 
         # Reset FastAPI cache
         reset_fastapi_cache(business_phone_number_id=business_phone_number_id)
+        botserver_reset = reset_botserver_sessions(
+            business_phone_number_id=business_phone_number_id,
+            tenant_id=tenant_id
+        )
 
         print(f"Automation reset successfully for tenant: {tenant_id}")
 
+        response_status = 'success' if botserver_reset.get('success') else 'partial_success'
+        response_message = (
+            'Automation reset successfully. Flow data cleared and bot sessions/cache refreshed.'
+            if botserver_reset.get('success')
+            else 'Automation flow data was cleared, but bot sessions/cache could not be fully reset.'
+        )
+
         return JsonResponse({
-            'status': 'success',
-            'message': 'Automation reset successfully. Flow data cleared and cache refreshed.',
+            'status': response_status,
+            'message': response_message,
             'cleared_fields': [
                 'flow_data', 'nodes', 'edges', 'adj_list', 'start',
                 'start_node_id', 'flow_version', 'flow_name', 'hop_nodes'
@@ -1386,8 +1445,10 @@ def reset_automation(request):
             'preserved_fields': [
                 'business_phone_number_id', 'access_token', 'business_account_id',
                 'fallback_count', 'fallback_message', 'language', 'multilingual', 'introductory_msg'
-            ]
-        }, status=200)
+            ],
+            'business_phone_number_id': business_phone_number_id,
+            'botserver_reset': botserver_reset
+        }, status=200 if botserver_reset.get('success') else 502)
 
     except Exception as e:
         print(f"Error resetting automation: {e}")
