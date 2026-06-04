@@ -143,7 +143,7 @@ class InterviewResponseCreateView(generics.CreateAPIView):
             )
 
         try:
-            tenant = Tenant.objects.get(tenant_id=tenant_id)
+            tenant = Tenant.objects.get(id=tenant_id)
         except Tenant.DoesNotExist:
             return Response(
                 {"error": f"Tenant {tenant_id} not found"},
@@ -222,7 +222,7 @@ def save_interview_from_flow(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        tenant = Tenant.objects.get(tenant_id=tenant_id)
+        tenant = Tenant.objects.get(id=tenant_id)
 
         # Create interview response
         interview_response = InterviewResponse.objects.create(
@@ -488,10 +488,20 @@ def extract_session_data(session_conversations, all_session_messages=None):
             response_value = None
             response_type = 'text'
 
-            if conv.message_type == 'audio' and conv.media_url:
-                response_value = conv.media_url
+            # Accept both 'audio' (legacy) and 'voice' (post-normalizer) types.
+            # New Node writer leaves media_url NULL and only stores media_id —
+            # fall back to the public media proxy in that case so the dashboard
+            # gets a resolvable URL.
+            audio_msg = conv.message_type in ('audio', 'voice')
+            audio_url = conv.media_url
+            if audio_msg and not audio_url and getattr(conv, 'media_id', None):
+                bpid = getattr(conv, 'business_phone_number_id', '') or ''
+                audio_url = f"https://webhook.nuren.ai/media/{conv.media_id}?bpid={bpid}"
+
+            if audio_msg and audio_url:
+                response_value = audio_url
                 response_type = 'audio'
-                data['audio_urls'].append(conv.media_url)
+                data['audio_urls'].append(audio_url)
             elif conv.message_text:
                 response_value = conv.message_text
                 response_type = 'text'
@@ -612,11 +622,15 @@ def import_from_direct_chat(request):
                 ).values_list('phone_no', 'session_timestamp')
             )
 
-        # Get user conversations only (simpler and faster)
+        # Get user conversations only (simpler and faster).
+        # NOTE: media_id + business_phone_number_id are pulled so we can fall
+        # back to the Node media-proxy URL for messages saved by the post-
+        # cutover writer (which stores only media_id, leaves media_url NULL).
         conversations = list(Conversation.objects.filter(
             tenant=tenant, sender='user'
         ).order_by('contact_id', 'date_time').values(
-            'contact_id', 'date_time', 'message_type', 'media_url', 'message_text', 'media_caption'
+            'contact_id', 'date_time', 'message_type', 'media_url', 'message_text',
+            'media_caption', 'media_id', 'business_phone_number_id'
         ))
 
         logger.info(f"Import: Found {len(conversations)} user messages")
@@ -682,12 +696,20 @@ def import_from_direct_chat(request):
                     skipped_count += 1
                     continue
 
-                # Extract audio URLs in order
+                # Extract audio URLs in order. Accept both legacy 'audio' and
+                # new 'voice' message types, and synthesize a proxy URL from
+                # media_id when the writer didn't populate media_url.
                 audio_urls = []
                 text_messages = []
                 for conv in session:
-                    if conv['message_type'] == 'audio' and conv['media_url']:
-                        audio_urls.append(conv['media_url'])
+                    mtype = conv.get('message_type')
+                    if mtype in ('audio', 'voice'):
+                        url = conv.get('media_url')
+                        if not url and conv.get('media_id'):
+                            bpid = conv.get('business_phone_number_id') or ''
+                            url = f"https://webhook.nuren.ai/media/{conv['media_id']}?bpid={bpid}"
+                        if url:
+                            audio_urls.append(url)
                     if conv['message_text']:
                         text_messages.append(conv['message_text'])
 
@@ -845,9 +867,16 @@ def public_interview_submit(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Hardcode tenant for all public interview submissions
+        # Hardcode tenant for all public interview submissions.
+        # NOTE: Tenant's primary key field is `id` (a CharField), not
+        # `tenant_id` — see tenant/models.py. Using `tenant_id=` here raised
+        # FieldError ("Cannot resolve keyword 'tenant_id' into field") which
+        # was caught by the bare `except Exception` at the bottom of the
+        # view and surfaced as a generic 500 with the message "An unexpected
+        # error occurred." That's the bug that was rejecting every Naad 2.0
+        # interview submission.
         try:
-            tenant = Tenant.objects.get(tenant_id='ehgymjv')
+            tenant = Tenant.objects.get(id='ehgymjv')
         except Tenant.DoesNotExist:
             logger.error("Tenant 'ehgymjv' not found in database")
             return Response(
