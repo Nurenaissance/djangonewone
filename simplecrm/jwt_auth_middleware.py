@@ -20,14 +20,18 @@ EXCLUDED_PATHS = [
     "/register-tenant/",
     "/register-unified/",
     "/register-google/",
+    "/login-google/",
     "/validate-invite-code/",
     "/oauth/token/",
     "/health/",
     "/facebook-callback/",
-    "/add-dynamic-data/",
+    # "/add-dynamic-data/" removed: legitimate callers (Node via setupAuth, n8n
+    # via X-Api-Key) authenticate; blanket bypass let any anonymous client write
+    # to any tenant via X-Tenant-Id header.
     "/admin/",  # Django admin uses its own auth
     "/interviews/import-from-chat/",  # Public endpoint for chat import
     "/interviews/public/submit/",  # Public interview submission from web form
+    "/interviews/public/employee-upload/",  # Naad 2.0 employee audio upload (replaces frontend-direct-to-Azure)
 ]
 
 # Origins that bypass authentication (trusted internal services)
@@ -94,11 +98,18 @@ class JWTAuthMiddleware:
     def __call__(self, request):
         """
         Authentication priority:
+        0. Allow CORS preflight (OPTIONS) so the CORS middleware can answer it.
+           Preflights never carry credentials by spec — applying JWT auth here
+           breaks every cross-origin POST/PUT/DELETE from the browser.
         1. Check if route is public → Allow
         2. Check for service API key → Allow (service-level access)
         3. Check for user JWT token → Validate and allow
         4. Reject request
         """
+        # 0. Always let CORS preflights through to the CORS middleware
+        if request.method == "OPTIONS":
+            return self.get_response(request)
+
         # 1. Allow unauthenticated/public paths
         if any(request.path.startswith(x) for x in EXCLUDED_PATHS):
             return self.get_response(request)
@@ -159,8 +170,18 @@ class JWTAuthMiddleware:
             request.scope = payload.get("scope")
             request.is_service_request = False
 
-            # Prefer header if available, else use JWT tenant
-            request.tenant_id = request.headers.get("X-Tenant-ID", jwt_tenant_id)
+            # Tenant precedence:
+            # - JWT claim is authoritative for user requests (prevents header-spoofing
+            #   a different tenant).
+            # - Header is only used when the JWT carries no claim (legacy clients).
+            # - Mismatch between header and claim is logged but does NOT override.
+            header_tenant_id = request.headers.get("X-Tenant-ID")
+            if header_tenant_id and jwt_tenant_id and header_tenant_id != jwt_tenant_id:
+                logger.warning(
+                    "Tenant header/JWT mismatch: header=%s jwt=%s user=%s (using JWT)",
+                    header_tenant_id, jwt_tenant_id, request.user_id,
+                )
+            request.tenant_id = jwt_tenant_id or header_tenant_id
 
             # Handle system/service scope from JWT
             if request.scope == "service" or request.user_role == "system":
@@ -182,33 +203,31 @@ class JWTAuthMiddleware:
             return self.get_response(request)
 
         except jwt.ExpiredSignatureError:
-            # Allow trusted sources even with expired token
-            if is_trusted_request(request):
-                request.is_trusted_origin = True
-                logger.info("✅ Trusted source with expired token - allowing request")
-                return self.get_response(request)
+            # Trusted origins must still present a non-expired token. Previously
+            # we accepted any expired token from a trusted origin, which made the
+            # origin allowlist a full auth bypass. Surface a clearer error so the
+            # caller knows to refresh, but never trust an expired credential.
+            logger.warning(
+                "Expired JWT (trusted_origin=%s)", is_trusted_request(request)
+            )
             return JsonResponse(
                 {"error": "token_expired", "message": "Access token has expired"},
                 status=401
             )
         except jwt.InvalidTokenError as e:
-            # Allow trusted sources even with invalid token
-            if is_trusted_request(request):
-                request.is_trusted_origin = True
-                logger.info("✅ Trusted source with invalid token - allowing request")
-                return self.get_response(request)
-            logger.warning(f"Invalid JWT token: {str(e)}")
+            logger.warning(
+                "Invalid JWT (trusted_origin=%s): %s",
+                is_trusted_request(request), str(e),
+            )
             return JsonResponse(
                 {"error": "invalid_token", "message": "Invalid token"},
                 status=401
             )
         except Exception as e:
-            # Allow trusted sources even on auth errors
-            if is_trusted_request(request):
-                request.is_trusted_origin = True
-                logger.info("✅ Trusted source with auth error - allowing request")
-                return self.get_response(request)
-            logger.error(f"Unexpected error in JWT middleware: {str(e)}")
+            logger.error(
+                "Unexpected error in JWT middleware (trusted_origin=%s): %s",
+                is_trusted_request(request), str(e),
+            )
             return JsonResponse(
                 {"error": "authentication_error", "message": "Authentication failed"},
                 status=401

@@ -1010,3 +1010,100 @@ def public_interview_submit(request):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def public_employee_audio_upload(request):
+    """
+    POST /interviews/public/employee-upload/
+
+    Uploads a single Naad 2.0 employee-interview audio clip to our object
+    storage (MinIO-backed, served as `azure_storage` for legacy callsite
+    compat) and returns the public URL.
+
+    Replaces the previous frontend-direct-to-Azure-with-SAS pattern, which
+    (a) baked a long-lived SAS token into the JS bundle — same Platform
+    Term 3.b credential-exposure issue we cleaned up in the May 2026
+    compliance pass — and (b) is now broken because the original Azure
+    Blob storage account `pdffornurenai` has been decommissioned (DNS no
+    longer resolves).
+
+    Form data:
+        - audio:            the audio file blob (required, multipart)
+        - employee_email:   identifier used for the blob key (required)
+        - part_name:        'part1' or 'part2' (required)
+        - file_extension:   defaults to 'webm' (frontend records as webm)
+
+    Returns:
+        201 {
+            "success": true,
+            "url": "https://storage.nuren.ai/nuren-media/interviews/employee/...",
+            "part_name": "part1"
+        }
+        400 / 500 on validation or upload failure with {"success": false,
+        "error": "..."}.
+    """
+    try:
+        from .azure_storage import get_azure_storage_client
+
+        audio_file = request.FILES.get('audio')
+        employee_email = (request.data.get('employee_email') or '').strip().lower()
+        part_name = (request.data.get('part_name') or '').strip()
+        file_extension = (request.data.get('file_extension') or 'webm').lstrip('.').lower()
+
+        if not audio_file:
+            return Response(
+                {"success": False, "error": "audio file is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not employee_email or '@' not in employee_email:
+            return Response(
+                {"success": False, "error": "valid employee_email is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if part_name not in ('part1', 'part2'):
+            return Response(
+                {"success": False, "error": "part_name must be 'part1' or 'part2'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            storage = get_azure_storage_client()
+        except Exception as e:
+            logger.error(f"Failed to initialize storage client: {e}")
+            return Response(
+                {"success": False, "error": "Storage service is not available. Please try again later."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # `candidate_name` arg drives the per-record folder; we use the
+        # email here (sanitised by the storage helper) so per-employee
+        # uploads cluster together in MinIO.
+        url = storage.upload_audio_file(
+            file_data=audio_file,
+            candidate_name=employee_email,
+            interview_type='employee',
+            part_name=part_name,
+            file_extension=file_extension,
+        )
+        if not url:
+            return Response(
+                {"success": False, "error": "Audio upload failed. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info(
+            f"Employee audio uploaded: email={employee_email}, part={part_name}, url={url}"
+        )
+        return Response(
+            {"success": True, "url": url, "part_name": part_name},
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in public employee audio upload: {str(e)}", exc_info=True)
+        return Response(
+            {"success": False, "error": "An unexpected error occurred. Please try again later."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
