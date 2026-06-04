@@ -8,6 +8,7 @@ from .views import (
     import_from_direct_chat,
     public_interview_submit,
     public_employee_audio_upload,
+    file_upload_view,
     dashboard_tabs,
 )
 
@@ -38,4 +39,8 @@ urlpatterns = [
     path('public/submit/', public_interview_submit, name='public-interview-submit'),
     # Per-part employee audio upload (replaces frontend-direct-to-Azure SAS)
     path('public/employee-upload/', public_employee_audio_upload, name='public-employee-audio-upload'),
+
+    # Generic authenticated file upload (replaces frontend-direct-to-Azure SAS
+    # in src/azureUpload.jsx — flow-builder uploads, etc).
+    path('files/upload/', file_upload_view, name='file-upload'),
 ]

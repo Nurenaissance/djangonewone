@@ -1,48 +1,66 @@
 """
-Azure Blob Storage utility for uploading interview audio files
+Storage client for interview audio files.
+
+Historically this hit Azure Blob (`pdffornurenai`). It now talks to MinIO via
+S3 — same public class + function names so callers don't need to change. The
+"azure" naming in the module / class is kept on purpose to avoid touching the
+~dozen import sites; under the hood it's boto3-on-MinIO.
 """
-import os
+
 import logging
+import os
+import re
 from datetime import datetime
-from typing import Optional, BinaryIO
+from typing import BinaryIO, Optional
+from urllib.parse import urlparse
+
+import boto3
+from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
 from django.conf import settings
-from azure.storage.blob import BlobServiceClient, ContentSettings
-from azure.core.exceptions import AzureError
 
 logger = logging.getLogger(__name__)
 
 
 class AzureStorageClient:
-    """
-    Client for uploading files to Azure Blob Storage
-    """
+    """S3 client for interview audio uploads. Name kept for call-site compat."""
 
     def __init__(self):
-        """Initialize the Azure Blob Storage client"""
-        self.connection_string = settings.AZURE_STORAGE_CONNECTION_STRING
-        self.container_name = settings.AZURE_STORAGE_CONTAINER
-        self.account_name = settings.AZURE_STORAGE_ACCOUNT_NAME
+        self.endpoint = os.getenv("S3_ENDPOINT", "http://minio:9000")
+        self.bucket = os.getenv("S3_BUCKET", "nuren-media")
+        self.public_url = os.getenv(
+            "S3_PUBLIC_URL", "https://storage.nuren.ai/nuren-media"
+        ).rstrip("/")
+        access_key = os.getenv("S3_ACCESS_KEY")
+        secret_key = os.getenv("S3_SECRET_KEY")
 
-        if not self.connection_string:
-            raise ValueError("AZURE_STORAGE_CONNECTION_STRING is not configured")
+        if not access_key or not secret_key:
+            raise ValueError(
+                "S3_ACCESS_KEY / S3_SECRET_KEY are not configured. See /opt/nuren/.env."
+            )
 
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=self.endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=os.getenv("S3_REGION", "us-east-1"),
+            # MinIO needs path-style (`endpoint/bucket/key`); vhost style would
+            # require a wildcard cert + DNS.
+            config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+
+        # Ensure bucket exists. MinIO returns 404 on HeadBucket if missing.
         try:
-            self.blob_service_client = BlobServiceClient.from_connection_string(
-                self.connection_string
-            )
-            self.container_client = self.blob_service_client.get_container_client(
-                self.container_name
-            )
-
-            # Ensure container exists
-            if not self.container_client.exists():
-                logger.warning(f"Container {self.container_name} does not exist. Creating it...")
-                self.container_client.create_container()
-                logger.info(f"Container {self.container_name} created successfully")
-
-        except AzureError as e:
-            logger.error(f"Failed to initialize Azure Blob Storage client: {e}")
-            raise
+            self.client.head_bucket(Bucket=self.bucket)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code")
+            if code in ("404", "NoSuchBucket", "NotFound"):
+                logger.warning("Bucket %s missing — creating", self.bucket)
+                self.client.create_bucket(Bucket=self.bucket)
+            else:
+                logger.error("Bucket check failed: %s", e)
+                raise
 
     def upload_audio_file(
         self,
@@ -50,176 +68,152 @@ class AzureStorageClient:
         candidate_name: str,
         interview_type: str,
         part_name: str,
-        file_extension: str = "wav"
+        file_extension: str = "wav",
     ) -> Optional[str]:
-        """
-        Upload an audio file to Azure Blob Storage with structured path
-
-        Args:
-            file_data: Binary file data (file object or bytes)
-            candidate_name: Name of the candidate (used in path)
-            interview_type: 'vidushi' or 'maan_vidushi'
-            part_name: e.g., 'calibration', 'part1', 'part2'
-            file_extension: File extension (default: 'wav')
-
-        Returns:
-            Public URL of the uploaded file, or None if upload failed
-
-        Structure:
-            interviews/{interview_type}/{candidate_name_sanitized}/{timestamp}_{part_name}.{ext}
-
-        Example:
-            interviews/vidushi/john_doe/20260203_143022_calibration.wav
-        """
+        """Upload an audio file and return its public URL (or None on failure)."""
         try:
-            # Sanitize candidate name for use in path (remove special chars, spaces to underscores)
             candidate_name_clean = self._sanitize_filename(candidate_name)
-
-            # Generate timestamp for unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            # Construct blob path
-            blob_path = f"interviews/{interview_type}/{candidate_name_clean}/{timestamp}_{part_name}.{file_extension}"
-
-            logger.info(f"Uploading audio file to: {blob_path}")
-
-            # Get blob client
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_path
+            key = (
+                f"interviews/{interview_type}/{candidate_name_clean}/"
+                f"{timestamp}_{part_name}.{file_extension}"
             )
 
-            # Set content type for audio files
-            content_settings = ContentSettings(
-                content_type='audio/wav' if file_extension == 'wav' else 'audio/mpeg'
-            )
+            content_type = "audio/wav" if file_extension == "wav" else "audio/mpeg"
 
-            # Upload the file
-            # If file_data is a file object, read it; if it's bytes, use directly
-            if hasattr(file_data, 'read'):
-                file_data.seek(0)  # Ensure we're at the beginning
-                blob_client.upload_blob(
-                    file_data,
-                    overwrite=True,
-                    content_settings=content_settings
-                )
+            if hasattr(file_data, "read"):
+                file_data.seek(0)
+                body = file_data.read()
             else:
-                blob_client.upload_blob(
-                    file_data,
-                    overwrite=True,
-                    content_settings=content_settings
-                )
+                body = file_data
 
-            # Generate the public URL
-            public_url = blob_client.url
-            logger.info(f"File uploaded successfully: {public_url}")
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=body,
+                ContentType=content_type,
+            )
 
-            return public_url
+            url = f"{self.public_url}/{key}"
+            logger.info("Uploaded %s -> %s", key, url)
+            return url
 
-        except AzureError as e:
-            logger.error(f"Azure Blob Storage error during upload: {e}")
+        except ClientError as e:
+            logger.error("S3 upload error: %s", e)
             return None
         except Exception as e:
-            logger.error(f"Unexpected error during file upload: {e}")
+            logger.exception("Unexpected upload error: %s", e)
+            return None
+
+    def upload_file(
+        self,
+        file_data: BinaryIO,
+        prefix: str,
+        original_filename: str,
+        content_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """Generic-purpose upload. Used by the /files/upload/ endpoint
+        (which replaces the old frontend-direct-to-Azure SAS pattern).
+
+        prefix:            logical folder under the bucket
+                           (e.g. "flow_uploads/<tenant>/<user>")
+        original_filename: client-side name; sanitised + timestamped to
+                           guarantee key uniqueness even on collisions
+        content_type:      passed through if provided; falls back to the
+                           browser-sent MIME on the file_data object, then
+                           to application/octet-stream
+
+        Returns the public URL on success, None on failure.
+        """
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            orig = (original_filename or "upload").strip()
+            if "." in orig:
+                base, _, ext = orig.rpartition(".")
+            else:
+                base, ext = orig, "bin"
+            base_clean = self._sanitize_filename(base)
+            ext_clean = re.sub(r"[^a-z0-9]", "", ext.lower())[:8] or "bin"
+            prefix_clean = "/".join(
+                self._sanitize_filename(p) for p in (prefix or "files").split("/") if p
+            )
+            key = f"{prefix_clean}/{timestamp}_{base_clean}.{ext_clean}"
+
+            inferred_type = (
+                content_type
+                or getattr(file_data, "content_type", None)
+                or "application/octet-stream"
+            )
+
+            if hasattr(file_data, "read"):
+                file_data.seek(0)
+                body = file_data.read()
+            else:
+                body = file_data
+
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=body,
+                ContentType=inferred_type,
+            )
+
+            url = f"{self.public_url}/{key}"
+            logger.info("Uploaded %s -> %s", key, url)
+            return url
+
+        except ClientError as e:
+            logger.error("S3 upload error: %s", e)
+            return None
+        except Exception as e:
+            logger.exception("Unexpected upload error: %s", e)
             return None
 
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
-        """
-        Sanitize filename for use in Azure Blob Storage paths
+        filename = (filename or "").lower().replace(" ", "_")
+        filename = re.sub(r"[^a-z0-9_\-]", "", filename)
+        return filename[:50]
 
-        Args:
-            filename: Original filename
-
-        Returns:
-            Sanitized filename with only alphanumeric chars, underscores, and hyphens
-        """
-        import re
-
-        # Convert to lowercase
-        filename = filename.lower()
-
-        # Replace spaces with underscores
-        filename = filename.replace(" ", "_")
-
-        # Remove all non-alphanumeric characters except underscores and hyphens
-        filename = re.sub(r'[^a-z0-9_\-]', '', filename)
-
-        # Limit length to 50 characters
-        filename = filename[:50]
-
-        return filename
+    def _key_from_url(self, url: str) -> str:
+        # Accept either the new MinIO URL or the legacy Azure URL — strip the
+        # host + bucket/container prefix and return the remaining object key.
+        path = urlparse(url).path.lstrip("/")
+        # path is either "<bucket>/<key>" (MinIO path-style) or
+        # "<container>/<key>" (legacy Azure). Drop the first segment.
+        if "/" in path:
+            _, _, key = path.partition("/")
+            return key
+        return path
 
     def delete_file(self, blob_url: str) -> bool:
-        """
-        Delete a file from Azure Blob Storage
-
-        Args:
-            blob_url: Full URL of the blob to delete
-
-        Returns:
-            True if deletion was successful, False otherwise
-        """
         try:
-            # Extract blob path from URL
-            # URL format: https://{account}.blob.core.windows.net/{container}/{blob_path}
-            blob_path = blob_url.split(f"{self.container_name}/")[-1]
-
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_path
-            )
-
-            blob_client.delete_blob()
-            logger.info(f"File deleted successfully: {blob_path}")
+            key = self._key_from_url(blob_url)
+            self.client.delete_object(Bucket=self.bucket, Key=key)
             return True
-
-        except AzureError as e:
-            logger.error(f"Failed to delete file from Azure Blob Storage: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during file deletion: {e}")
+        except ClientError as e:
+            logger.error("Delete failed: %s", e)
             return False
 
     def file_exists(self, blob_url: str) -> bool:
-        """
-        Check if a file exists in Azure Blob Storage
-
-        Args:
-            blob_url: Full URL of the blob to check
-
-        Returns:
-            True if file exists, False otherwise
-        """
         try:
-            blob_path = blob_url.split(f"{self.container_name}/")[-1]
-
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_path
-            )
-
-            return blob_client.exists()
-
-        except Exception as e:
-            logger.error(f"Error checking file existence: {e}")
+            key = self._key_from_url(blob_url)
+            self.client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code")
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return False
+            logger.error("file_exists check failed: %s", e)
             return False
 
 
-# Singleton instance
-_azure_storage_client = None
+_azure_storage_client: Optional[AzureStorageClient] = None
 
 
 def get_azure_storage_client() -> AzureStorageClient:
-    """
-    Get or create the singleton Azure Storage client instance
-
-    Returns:
-        AzureStorageClient instance
-    """
+    """Singleton accessor — name kept for call-site compatibility."""
     global _azure_storage_client
-
     if _azure_storage_client is None:
         _azure_storage_client = AzureStorageClient()
-
     return _azure_storage_client

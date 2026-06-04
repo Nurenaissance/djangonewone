@@ -1013,6 +1013,99 @@ def public_interview_submit(request):
 
 
 @api_view(['POST'])
+def file_upload_view(request):
+    """
+    POST /interviews/files/upload/
+
+    Generic authenticated file upload. Drop-in replacement for the
+    previous frontend-direct-to-Azure-Blob pattern used by
+    src/azureUpload.jsx (flow-builder uploads, etc).
+
+    Why this endpoint and not the public-employee one: this one requires
+    a valid JWT (no entry in BYPASS_AUTH_PATHS), so it can't be abused
+    by random clients on the open internet. It writes to the same MinIO
+    backend used by interview submissions; objects are namespaced by
+    tenant + user so different tenants don't collide.
+
+    Form data:
+        - file        the file blob (required, multipart)
+        - user_id     optional, used in the storage key for traceability
+        - tenant_id   optional, falls back to X-Tenant-Id header
+        - prefix      optional, defaults to "flow_uploads"
+
+    Returns:
+        201 { "success": true, "url": "https://...media-store/.../file.ext" }
+        400 on missing/invalid file
+        500 on storage failure
+    """
+    try:
+        from .azure_storage import get_azure_storage_client
+
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return Response(
+                {"success": False, "error": "file is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Soft guard rail. MinIO handles large uploads fine but the gunicorn
+        # worker timeout is 120s; flag obviously-out-of-scope payloads.
+        max_bytes = 50 * 1024 * 1024  # 50 MB
+        if uploaded.size and uploaded.size > max_bytes:
+            return Response(
+                {"success": False, "error": f"file too large (>{max_bytes // (1024 * 1024)} MB)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_id = (request.data.get('user_id') or '').strip() or 'unknown_user'
+        tenant_id = (
+            (request.data.get('tenant_id') or '').strip()
+            or request.headers.get('X-Tenant-Id')
+            or request.headers.get('X-Tenant-ID')
+            or 'unknown_tenant'
+        )
+        prefix_root = (request.data.get('prefix') or 'flow_uploads').strip() or 'flow_uploads'
+        prefix = f"{prefix_root}/{tenant_id}/{user_id}"
+
+        try:
+            storage = get_azure_storage_client()
+        except Exception as e:
+            logger.error(f"Failed to initialize storage client: {e}")
+            return Response(
+                {"success": False, "error": "Storage service is not available. Please try again later."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        url = storage.upload_file(
+            file_data=uploaded,
+            prefix=prefix,
+            original_filename=uploaded.name or 'upload',
+            content_type=getattr(uploaded, 'content_type', None),
+        )
+        if not url:
+            return Response(
+                {"success": False, "error": "Upload failed. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info(
+            f"File uploaded: tenant={tenant_id}, user={user_id}, "
+            f"size={uploaded.size}, url={url}"
+        )
+        return Response(
+            {"success": True, "url": url},
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in file_upload_view: {str(e)}", exc_info=True)
+        return Response(
+            {"success": False, "error": "An unexpected error occurred. Please try again later."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
 @permission_classes([AllowAny])
 def public_employee_audio_upload(request):
     """
