@@ -8,6 +8,8 @@ from .views import (
     import_from_direct_chat,
     public_interview_submit,
     public_employee_audio_upload,
+    public_candidate_audio_upload,
+    public_interview_finalize,
     file_upload_view,
     dashboard_tabs,
 )
@@ -39,6 +41,13 @@ urlpatterns = [
     path('public/submit/', public_interview_submit, name='public-interview-submit'),
     # Per-part employee audio upload (replaces frontend-direct-to-Azure SAS)
     path('public/employee-upload/', public_employee_audio_upload, name='public-employee-audio-upload'),
+
+    # Per-part candidate (vidushi / maan_vidushi) audio upload + small-JSON
+    # finalize call. Split out from the legacy /public/submit/ multipart
+    # endpoint so a single network blip only loses one part, not the whole
+    # 17-minute recording.
+    path('public/candidate-upload/', public_candidate_audio_upload, name='public-candidate-audio-upload'),
+    path('public/finalize/', public_interview_finalize, name='public-interview-finalize'),
 
     # Generic authenticated file upload (replaces frontend-direct-to-Azure SAS
     # in src/azureUpload.jsx — flow-builder uploads, etc).

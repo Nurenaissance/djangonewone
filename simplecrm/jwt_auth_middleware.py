@@ -32,6 +32,8 @@ EXCLUDED_PATHS = [
     "/interviews/import-from-chat/",  # Public endpoint for chat import
     "/interviews/public/submit/",  # Public interview submission from web form
     "/interviews/public/employee-upload/",  # Naad 2.0 employee audio upload (replaces frontend-direct-to-Azure)
+    "/interviews/public/candidate-upload/",  # Naad 2.0 candidate per-part audio upload
+    "/interviews/public/finalize/",  # Naad 2.0 candidate flow finalize (records DB row from uploaded URLs)
 ]
 
 # Origins that bypass authentication (trusted internal services)

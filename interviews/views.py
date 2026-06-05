@@ -1107,6 +1107,252 @@ def file_upload_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+def public_candidate_audio_upload(request):
+    """
+    POST /interviews/public/candidate-upload/
+
+    Per-part audio upload for the Naad 2.0 candidate flow (vidushi /
+    maan_vidushi). Mirrors the employee upload pattern so the frontend
+    can stream one part at a time with per-part retry — a single
+    network blip only loses one part's upload, not the whole 17 minutes
+    of recording.
+
+    Form data:
+        - audio:           the audio file blob (required, multipart)
+        - phone_number:    candidate phone number (required, used in key)
+        - candidate_name:  candidate name (required)
+        - interview_type:  'vidushi' or 'maan_vidushi' (required)
+        - part_name:       'calibration' | 'part1' | 'part2' (required)
+        - file_extension:  defaults to 'webm'
+
+    Returns:
+        201 { success: true, url, part_name }
+        400 on validation
+        413 if body > Nginx cap (handled by Nginx itself, never reaches here)
+        503 if storage init fails
+        500 with the actual exception class on unexpected errors
+    """
+    try:
+        from .azure_storage import get_azure_storage_client
+
+        audio_file = request.FILES.get('audio')
+        phone_number = (request.data.get('phone_number') or '').strip()
+        candidate_name = (request.data.get('candidate_name') or '').strip()
+        interview_type = (request.data.get('interview_type') or '').strip()
+        part_name = (request.data.get('part_name') or '').strip()
+        file_extension = (request.data.get('file_extension') or 'webm').lstrip('.').lower()
+
+        if not audio_file:
+            return Response(
+                {"success": False, "error": "audio file is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not phone_number:
+            return Response(
+                {"success": False, "error": "phone_number is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not candidate_name:
+            return Response(
+                {"success": False, "error": "candidate_name is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if interview_type not in ('vidushi', 'maan_vidushi'):
+            return Response(
+                {"success": False, "error": "interview_type must be 'vidushi' or 'maan_vidushi'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if part_name not in ('calibration', 'part1', 'part2'):
+            return Response(
+                {"success": False, "error": "part_name must be 'calibration', 'part1', or 'part2'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            storage = get_azure_storage_client()
+        except Exception as e:
+            logger.error(f"Failed to initialize storage client: {e}")
+            return Response(
+                {
+                    "success": False,
+                    "error": "Storage service is currently unavailable. Please try again in a moment.",
+                    "error_code": "STORAGE_INIT_FAILED",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        url = storage.upload_audio_file(
+            file_data=audio_file,
+            candidate_name=candidate_name,
+            interview_type=interview_type,
+            part_name=part_name,
+            file_extension=file_extension,
+        )
+        if not url:
+            return Response(
+                {
+                    "success": False,
+                    "error": "Could not write the audio file to storage. Please try this part again.",
+                    "error_code": "STORAGE_WRITE_FAILED",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info(
+            f"Candidate audio uploaded: phone={phone_number}, "
+            f"type={interview_type}, part={part_name}, url={url}"
+        )
+        return Response(
+            {"success": True, "url": url, "part_name": part_name},
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        # Surface the exception class to the client so the frontend can
+        # show a specific message instead of "try again later" for every
+        # different failure mode. Body text intentionally avoids leaking
+        # tracebacks or internal paths.
+        logger.error(f"Error in public_candidate_audio_upload: {str(e)}", exc_info=True)
+        return Response(
+            {
+                "success": False,
+                "error": f"Unexpected server error while uploading audio ({type(e).__name__}).",
+                "error_code": "UNEXPECTED_ERROR",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def public_interview_finalize(request):
+    """
+    POST /interviews/public/finalize/
+
+    Final step of the Naad 2.0 candidate flow. After the frontend has
+    uploaded all three audio parts to /interviews/public/candidate-upload/
+    and received URLs back, this endpoint records the InterviewResponse
+    row referencing those URLs. Tiny JSON body, virtually can't fail —
+    keeps the high-risk surface (multipart audio) separate from the DB
+    write.
+
+    JSON body:
+        - phone_number     (required)
+        - candidate_name   (required)
+        - interview_type   ('vidushi' | 'maan_vidushi')
+        - calibration_url  (required)
+        - part1_url        (required)
+        - part2_url        (required)
+        - submission_ip    (optional)
+        - user_agent       (optional)
+
+    Returns 201 on success with the new row's metadata.
+    """
+    try:
+        phone_number = (request.data.get('phone_number') or '').strip()
+        candidate_name = (request.data.get('candidate_name') or '').strip()
+        interview_type = (request.data.get('interview_type') or '').strip()
+        calibration_url = (request.data.get('calibration_url') or '').strip()
+        part1_url = (request.data.get('part1_url') or '').strip()
+        part2_url = (request.data.get('part2_url') or '').strip()
+
+        # Specific per-field validation messages — the frontend will
+        # surface these verbatim.
+        missing = [
+            name for name, val in [
+                ('phone_number', phone_number),
+                ('candidate_name', candidate_name),
+                ('interview_type', interview_type),
+                ('calibration_url', calibration_url),
+                ('part1_url', part1_url),
+                ('part2_url', part2_url),
+            ] if not val
+        ]
+        if missing:
+            return Response(
+                {"success": False, "error": f"Missing required field(s): {', '.join(missing)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if interview_type not in ('vidushi', 'maan_vidushi'):
+            return Response(
+                {"success": False, "error": "interview_type must be 'vidushi' or 'maan_vidushi'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Hardcode tenant for all public interview submissions — same
+        # pattern as the legacy /submit/ endpoint. Tenant PK is `id`,
+        # NOT tenant_id (see tenant/models.py).
+        try:
+            tenant = Tenant.objects.get(id='ehgymjv')
+        except Tenant.DoesNotExist:
+            logger.error("Tenant 'ehgymjv' not found in database")
+            return Response(
+                {
+                    "success": False,
+                    "error": "Server is misconfigured (tenant lookup failed). Please contact support.",
+                    "error_code": "TENANT_NOT_FOUND",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        submission_ip = request.data.get('submission_ip') or request.META.get('REMOTE_ADDR')
+        user_agent = request.data.get('user_agent') or request.META.get('HTTP_USER_AGENT')
+
+        interview_response = InterviewResponse.objects.create(
+            phone_no=phone_number,
+            candidate_name=candidate_name,
+            interview_type=interview_type,
+            flow_name='naad_2.0_interview',
+            calibration_audio=calibration_url,
+            part1_audio=part1_url,
+            part2_audio=part2_url,
+            status='completed',
+            submission_ip=submission_ip,
+            user_agent=user_agent,
+            tenant=tenant,
+        )
+
+        logger.info(
+            f"Interview finalized: phone={phone_number}, name={candidate_name}, "
+            f"type={interview_type}, id={interview_response.id}"
+        )
+
+        # Invalidate dashboard caches (same as legacy submit endpoint).
+        from django.core.cache import cache
+        tab_key = 'vidushi' if interview_type == 'vidushi' else 'maan_vidushi'
+        cache.delete(f"interview_stats_ehgymjv_tab_{tab_key}")
+        cache.delete("dashboard_tabs_ehgymjv")
+
+        return Response(
+            {
+                "success": True,
+                "message": "Interview submitted successfully! Thank you for your response.",
+                "data": {
+                    "id": interview_response.id,
+                    "phone_number": interview_response.phone_no,
+                    "candidate_name": interview_response.candidate_name,
+                    "interview_type": interview_response.interview_type,
+                    "timestamp": interview_response.timestamp.isoformat(),
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in public_interview_finalize: {str(e)}", exc_info=True)
+        return Response(
+            {
+                "success": False,
+                "error": f"Could not record the interview ({type(e).__name__}). Your audio is safely uploaded — please retry submission.",
+                "error_code": "FINALIZE_FAILED",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
 def public_employee_audio_upload(request):
     """
     POST /interviews/public/employee-upload/

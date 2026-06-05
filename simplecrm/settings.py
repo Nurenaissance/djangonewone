@@ -15,7 +15,71 @@ from dotenv import load_dotenv
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from corsheaders.defaults import default_headers
 
+ALLOWED_HOSTS = [
+"*"
+]
+
+def _env_list(name, default):
+    """Read a comma-separated env var into a Python list; fall back to default."""
+    raw = os.environ.get(name, "")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return parts or default
+
+_DEFAULT_ORIGINS = [
+    "https://nuren.ai",
+    "https://www.nuren.ai",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+]
+
+CSRF_TRUSTED_ORIGINS = list(set(
+    _env_list("CSRF_TRUSTED_ORIGINS", _DEFAULT_ORIGINS) + [
+        "https://api.nuren.ai",
+        "https://nuren.ai",
+        "https://www.nuren.ai",
+    ]
+))
+
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOWED_ORIGINS = list(set(
+    _env_list("CORS_ALLOWED_ORIGINS", _DEFAULT_ORIGINS) + _DEFAULT_ORIGINS
+))
+
+# Match any Vercel preview deployment URL (each deploy gets a unique hostname).
+# Without this, every preview URL would need to be added to the env explicitly.
+# This is bounded by 'allow_credentials=True' so the wildcard isn't exploitable
+# in the same way as origins=['*'] — the regex match still ends up as a single
+# echoed origin in the response.
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+    r"^https://.*\.nuren\.ai$",
+]
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+"X-Tenant-Id",
+    "Authorization",
+    "X-CSRFToken",
+    "X-Requested-With",
+]
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+SESSION_COOKIE_SAMESITE = "None"
+SESSION_COOKIE_SECURE = True
+
+CSRF_COOKIE_SAMESITE = "None"
+CSRF_COOKIE_SECURE = True
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
@@ -26,7 +90,6 @@ SECRET_KEY = '77fy+^i(n=2)tq$0)&31d@uf3t+ge##$aclyla&lmr@lpinc1&'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ['*','http://127.0.0.1:9000/']
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "whatsapp-business-automation-jwt-secret-2026-change-in-production")
 JWT_ALGORITHM = "HS256"
@@ -241,7 +304,7 @@ DATABASES = {
         'HOST': os.environ.get('DB_HOST', 'nurenaistore.postgres.database.azure.com'),
         'PORT': DB_PORT,
         'OPTIONS': {
-            'sslmode': 'require',
+            'sslmode': 'disable',
             'connect_timeout': 10,
         },
         # PgBouncer transaction mode requires CONN_MAX_AGE=0; direct mode can reuse connections
@@ -269,7 +332,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-CSRF_TRUSTED_ORIGINS = ['https://b3fa-14-142-75-54.ngrok-free.app','http://localhost:3000',"https://dea2-14-142-75-54.ngrok-free.app","http://127.0.0.1:8000" ]
+
 # Internationalization
 # https://docs.djangoproject.com/en/2.0/topics/i18n/
 
@@ -278,6 +341,17 @@ LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
 
 USE_I18N = True
+STATIC_URL = '/static/'
+
+
+
+ASGI_APPLICATION = 'simplecrm.asgi.application'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
 
 USE_L10N = True
 
@@ -289,23 +363,26 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
-CORS_ORIGIN_WHITELIST = (
-    'http://localhost:3000',
-    'http://localhost:5173/',
-    'https://nuren.ai/'
-)
 
-CORS_ALLOW_ALL_ORIGINS=True
-CORS_ALLOW_HEADERS = [
-    'X-Tenant-Id',  # Add the headers you need to allow
-    'Content-Type',
-]
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "https://nuren.ai",
-    "https://nurenaiautomatic-b7hmdnb4fzbpbtbh.canadacentral-01.azurewebsites.net",
-]
+# Upload size caps.
+#
+# Django's defaults are 2.5 MB for both DATA_UPLOAD_MAX_MEMORY_SIZE (total
+# request body size — raises RequestDataTooBig past this) and
+# FILE_UPLOAD_MAX_MEMORY_SIZE (where individual file uploads spill from
+# memory to a tempfile on disk).
+#
+# Naad 2.0 interview submissions are 5-15 MB of webm/opus audio across
+# three parts; longer formats with 2 min/question can reach ~25 MB. The
+# generic /interviews/files/upload/ accepts arbitrary user files. 60 MB
+# covers both with headroom; Nginx caps at 50 MB upstream so the wall
+# is enforced there with a clean 413 the frontend can surface.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 60 * 1024 * 1024   # 60 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB — files bigger than
+                                                  # this stream to a tempfile
+                                                  # via TemporaryFileUploadHandler
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000              # default 1000 — multipart
+                                                  # parts each count as a field
+
 
 ASGI_APPLICATION = 'simplecrm.asgi.application'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
