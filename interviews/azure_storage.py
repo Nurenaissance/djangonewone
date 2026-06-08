@@ -22,6 +22,38 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
+# Map of common audio/file extensions to correct MIME types.
+#
+# Historically this client hard-coded "audio/mpeg" as the default for anything
+# that wasn't .wav — which silently broke playback for browser-recorded .webm
+# files (every interview-dashboard audio link returned audio/mpeg, browsers
+# tried to decode as MP3 and failed). The mapping below covers every audio
+# format the browser MediaRecorder API can emit, plus the WhatsApp media
+# extensions we see in inbound webhooks.
+_AUDIO_MIME = {
+    "wav": "audio/wav",
+    "webm": "audio/webm",
+    "ogg": "audio/ogg",
+    "oga": "audio/ogg",
+    "opus": "audio/ogg",
+    "mp3": "audio/mpeg",
+    "m4a": "audio/mp4",
+    "mp4": "audio/mp4",
+    "aac": "audio/aac",
+    "amr": "audio/amr",
+    "3gp": "audio/3gpp",
+    "flac": "audio/flac",
+}
+
+
+def _audio_content_type(file_extension: str) -> str:
+    """Resolve the right Content-Type for an audio upload from its extension.
+    Falls back to audio/<ext> for unknown types so the file is at least
+    served as audio (not mpeg)."""
+    ext = (file_extension or "").lstrip(".").lower()
+    return _AUDIO_MIME.get(ext, f"audio/{ext}" if ext else "application/octet-stream")
+
+
 class AzureStorageClient:
     """S3 client for interview audio uploads. Name kept for call-site compat."""
 
@@ -79,7 +111,7 @@ class AzureStorageClient:
                 f"{timestamp}_{part_name}.{file_extension}"
             )
 
-            content_type = "audio/wav" if file_extension == "wav" else "audio/mpeg"
+            content_type = _audio_content_type(file_extension)
 
             if hasattr(file_data, "read"):
                 file_data.seek(0)
