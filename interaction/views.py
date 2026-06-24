@@ -252,6 +252,102 @@ def save_conversations(request, contact_id):
         return handle_error(e)
 
 
+def _conversation_kwargs_from_message(message):
+    """Extract all rich-media + reaction fields from an incoming message dict.
+
+    Accepts both the new Node payload shape (type/caption/filename/...) and the
+    legacy shape (message_type/media_caption/media_filename) so a Django deploy
+    that lands ahead of the Node deploy keeps working.
+
+    Returns a dict suitable for Conversation(**kwargs).
+    """
+    kw = {
+        # Type (Node sends 'type', legacy 'message_type'). Default text.
+        "message_type": message.get("type") or message.get("message_type") or "text",
+        # Media fields
+        "wa_message_id": message.get("wa_message_id"),
+        "media_id": message.get("media_id"),
+        "mime_type": message.get("mime_type"),
+        "media_caption": message.get("caption") or message.get("media_caption"),
+        "media_filename": message.get("filename") or message.get("media_filename"),
+        "media_url": message.get("media_url"),
+        "thumbnail_url": message.get("thumbnail_url"),
+        # Reply / quote
+        "quoted_message_id": message.get("quoted_message_id"),
+        # Variant flags
+        "is_voice": bool(message.get("is_voice", False)),
+        "is_animated": bool(message.get("is_animated", False)),
+        "forwarded": bool(message.get("forwarded", False)),
+        "frequently_forwarded": bool(message.get("frequently_forwarded", False)),
+        # Type-specific payloads
+        "location_data": message.get("location"),
+        "contacts_data": message.get("contacts"),
+        "interactive_data": message.get("interactive"),
+        "referred_product": message.get("referred_product"),
+        "order_data": message.get("order"),
+    }
+    # Reaction event (type='reaction'): the row itself is the reaction. Capture
+    # target + emoji so we can both (a) keep it as a discrete row and (b) update
+    # the original target message's reactions[] in a follow-up step.
+    reaction = message.get("reaction") or {}
+    if reaction:
+        kw["reaction_target_id"] = reaction.get("target_message_id") or reaction.get("message_id")
+        kw["reaction_emoji"] = reaction.get("emoji") or None
+    # Drop keys whose value is None to keep the row tidy and let DB defaults apply
+    return {k: v for k, v in kw.items() if v is not None}
+
+
+def _apply_reactions_to_targets(reaction_rows):
+    """For each reaction-type row just saved, append it to the target message's
+    cumulative `reactions` JSON array. Lookup is by wa_message_id =
+    reaction_target_id. A WhatsApp user sending an empty-emoji reaction removes
+    their previous reaction — handle that case by filtering them out.
+
+    `reaction_rows` is an iterable of dicts with keys: target_message_id,
+    emoji, from_phone, timestamp, tenant_id.
+    """
+    if not reaction_rows:
+        return
+    # Group by target so we do one UPDATE per target message
+    by_target = {}
+    for r in reaction_rows:
+        tgt = r.get("target_message_id")
+        if not tgt:
+            continue
+        by_target.setdefault(tgt, []).append(r)
+    if not by_target:
+        return
+    for target_id, new_reactions in by_target.items():
+        try:
+            with transaction.atomic():
+                # Update across ALL message-rows sharing this wa_message_id
+                # (typically one). select_for_update so concurrent reactions
+                # don't trample each other.
+                rows = list(
+                    Conversation.objects.select_for_update()
+                    .filter(wa_message_id=target_id)
+                )
+                for row in rows:
+                    current = list(row.reactions or [])
+                    # Drop any prior reaction from the same user — a user can
+                    # only have one active reaction per message at a time.
+                    for nr in new_reactions:
+                        sender_phone = nr.get("from_phone")
+                        current = [c for c in current if c.get("from") != sender_phone]
+                        if nr.get("emoji"):  # empty emoji = removed
+                            current.append({
+                                "from": sender_phone,
+                                "emoji": nr["emoji"],
+                                "timestamp": nr.get("timestamp"),
+                            })
+                    row.reactions = current
+                    row.save(update_fields=["reactions"])
+        except Exception as exc:
+            logger.warning(
+                f"Failed to apply reactions to target {target_id}: {exc}"
+            )
+
+
 def save_conversations_sync(payload, key):
     """
     Synchronous fallback when Celery is unavailable.
@@ -276,10 +372,14 @@ def save_conversations_sync(payload, key):
 
         # OPTIMIZED: Prepare all objects first, then bulk insert
         conversations_to_create = []
+        # Collect reaction events so we can update the target messages' cumulative
+        # reactions[] array after the bulk insert.
+        reaction_rows_to_apply = []
 
         for message in conversations:
             try:
                 text = message.get('text', '')
+                rich_kwargs = _conversation_kwargs_from_message(message)
 
                 if key:
                     # Encrypt message text
@@ -299,11 +399,7 @@ def save_conversations_sync(payload, key):
                         source=source,
                         business_phone_number_id=bpid,
                         date_time=timestamp,
-                        message_type=message.get('message_type', 'text'),
-                        media_url=message.get('media_url'),
-                        media_caption=message.get('media_caption'),
-                        media_filename=message.get('media_filename'),
-                        thumbnail_url=message.get('thumbnail_url')
+                        **rich_kwargs,
                     ))
                 else:
                     # No encryption key — save as plaintext
@@ -315,12 +411,18 @@ def save_conversations_sync(payload, key):
                         source=source,
                         business_phone_number_id=bpid,
                         date_time=timestamp,
-                        message_type=message.get('message_type', 'text'),
-                        media_url=message.get('media_url'),
-                        media_caption=message.get('media_caption'),
-                        media_filename=message.get('media_filename'),
-                        thumbnail_url=message.get('thumbnail_url')
+                        **rich_kwargs,
                     ))
+
+                # Stash reaction events for the post-insert aggregation step.
+                if rich_kwargs.get("reaction_target_id"):
+                    reaction_rows_to_apply.append({
+                        "target_message_id": rich_kwargs["reaction_target_id"],
+                        "emoji": rich_kwargs.get("reaction_emoji"),
+                        "from_phone": contact_id,
+                        "timestamp": str(timestamp),
+                        "tenant_id": tenant_id,
+                    })
             except Exception as msg_error:
                 logger.error(f"Error preparing message: {msg_error}")
                 continue
@@ -329,6 +431,9 @@ def save_conversations_sync(payload, key):
         if conversations_to_create:
             with transaction.atomic():
                 Conversation.objects.bulk_create(conversations_to_create, batch_size=500)
+
+        # Aggregate reactions onto the target message's reactions[] array.
+        _apply_reactions_to_targets(reaction_rows_to_apply)
 
         saved_count = len(conversations_to_create)
         logger.info(f"Sync saved {saved_count} conversations for {contact_id} (bulk)")
@@ -364,9 +469,11 @@ def save_conversations_sync_from_pending(payload, key):
         return 0
 
     conversations_to_create = []
+    reaction_rows_to_apply = []
 
     for message in conversations:
         text = message.get('text', '')
+        rich_kwargs = _conversation_kwargs_from_message(message)
         data_str = json.dumps(text)
         iv = sync_os.urandom(16)
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -383,16 +490,23 @@ def save_conversations_sync_from_pending(payload, key):
             source=source,
             business_phone_number_id=bpid,
             date_time=timestamp,
-            message_type=message.get('message_type', 'text'),
-            media_url=message.get('media_url'),
-            media_caption=message.get('media_caption'),
-            media_filename=message.get('media_filename'),
-            thumbnail_url=message.get('thumbnail_url')
+            **rich_kwargs,
         ))
+
+        if rich_kwargs.get("reaction_target_id"):
+            reaction_rows_to_apply.append({
+                "target_message_id": rich_kwargs["reaction_target_id"],
+                "emoji": rich_kwargs.get("reaction_emoji"),
+                "from_phone": contact_id,
+                "timestamp": str(timestamp),
+                "tenant_id": tenant_id,
+            })
 
     if conversations_to_create:
         with transaction.atomic():
             Conversation.objects.bulk_create(conversations_to_create, batch_size=500)
+
+    _apply_reactions_to_targets(reaction_rows_to_apply)
 
     saved_count = len(conversations_to_create)
     logger.info(f"✅ Pending task saved {saved_count} conversations for {contact_id}")
@@ -444,40 +558,111 @@ def handle_error(error):
 # Most of GET requests are done at fastAPI
 @csrf_exempt
 def view_conversation(request, contact_id):
+    """
+    Return a contact's full WhatsApp conversation history including all rich
+    fields the chat UI needs to render real-WhatsApp-style:
+      - reactions on each message
+      - quoted_message_id for reply quote boxes
+      - media (caption, filename, mime_type, media_id, media_url)
+      - voice notes vs audio files (is_voice flag)
+      - stickers (is_animated)
+      - location / contacts / interactive / order payloads
+      - forwarded label
+    """
     try:
-        # Query conversations for a specific contact_id
         source = request.GET.get('source', '')
         bpid = request.GET.get('bpid')
         tenant_id = request.headers.get('X-Tenant-Id')
 
-        conversations = Conversation.objects.filter(contact_id=contact_id,business_phone_number_id=bpid,source=source).values('message_text', 'sender', 'encrypted_message_text').order_by('date_time')
+        # Fields the UI needs. Order matches the model declaration so any new
+        # column can be added once and shows up here automatically once added
+        # to this whitelist.
+        RICH_FIELDS = (
+            'id', 'message_text', 'encrypted_message_text', 'sender', 'date_time',
+            'message_type', 'wa_message_id', 'media_id', 'media_url', 'media_caption',
+            'media_filename', 'mime_type', 'thumbnail_url',
+            'quoted_message_id',
+            'reaction_target_id', 'reaction_emoji', 'reactions',
+            'is_voice', 'is_animated', 'forwarded', 'frequently_forwarded',
+            'location_data', 'contacts_data', 'interactive_data',
+            'referred_product', 'order_data',
+        )
+        conversations = (
+            Conversation.objects
+            .filter(contact_id=contact_id, business_phone_number_id=bpid, source=source)
+            .values(*RICH_FIELDS)
+            .order_by('date_time')
+        )
 
-        tenant = Tenant.objects.get(id = tenant_id)
+        tenant = Tenant.objects.get(id=tenant_id)
         encryption_key = tenant.key
-        # print("ENC KEY: ", tenant_id)
 
-        # Format data as per your requirement
         formatted_conversations = []
         for conv in conversations:
             text_to_append = conv.get('message_text', None)
             encrypted_text = conv.get('encrypted_message_text', None)
-            # print("text: ", text)
 
-            if encrypted_text!= None:
-                encrypted_text = encrypted_text.tobytes()
-                decrypted_text = decrypt_data(encrypted_text, key=encryption_key)
-                # print("Decrypted Text: ", decrypted_text)
-                if decrypted_text:
-                    text_to_append = json.dumps(decrypted_text)
-                    if text_to_append.startswith('"') and text_to_append.endswith('"'):
-                        text_to_append = text_to_append[1:-1]
-            # print("Text to append: ", text_to_append, type(text_to_append))
-            formatted_conversations.append({'text': text_to_append, 'sender': conv['sender']})
+            if encrypted_text is not None:
+                try:
+                    encrypted_text = encrypted_text.tobytes()
+                    decrypted_text = decrypt_data(encrypted_text, key=encryption_key)
+                    if decrypted_text:
+                        text_to_append = json.dumps(decrypted_text)
+                        if text_to_append.startswith('"') and text_to_append.endswith('"'):
+                            text_to_append = text_to_append[1:-1]
+                except Exception as dec_err:
+                    logger.warning(f"Decrypt failed for conv id={conv.get('id')}: {dec_err}")
+
+            # Synthesize the Node media-proxy URL when media_url is empty but
+            # media_id is present (post-cutover Node writer doesn't pre-resolve
+            # the Meta media URL). Keeps the chat UI download/play button alive
+            # for new audio/voice/image rows.
+            effective_media_url = conv.get('media_url')
+            if not effective_media_url and conv.get('media_id'):
+                effective_media_url = (
+                    f"https://webhook.nuren.ai/media/{conv['media_id']}?bpid={bpid or ''}"
+                )
+
+            # Build the rich entry. UI can use `type` to switch render mode
+            # (text/image/voice/reaction/quote-bubble/etc.).
+            entry = {
+                'id': conv.get('id'),
+                'text': text_to_append,
+                'sender': conv['sender'],
+                'timestamp': conv.get('date_time').isoformat() if conv.get('date_time') else None,
+                'type': conv.get('message_type') or 'text',
+                'wa_message_id': conv.get('wa_message_id'),
+                'media_id': conv.get('media_id'),
+                'media_url': effective_media_url,
+                'mime_type': conv.get('mime_type'),
+                'caption': conv.get('media_caption'),
+                'filename': conv.get('media_filename'),
+                'thumbnail_url': conv.get('thumbnail_url'),
+                'quoted_message_id': conv.get('quoted_message_id'),
+                'reaction_target_id': conv.get('reaction_target_id'),
+                'reaction_emoji': conv.get('reaction_emoji'),
+                # Reactions left on this message by other users — list of
+                # {from, emoji, timestamp}. Chat UI renders bubbles based on this.
+                'reactions': conv.get('reactions') or [],
+                'is_voice': bool(conv.get('is_voice')),
+                'is_animated': bool(conv.get('is_animated')),
+                'forwarded': bool(conv.get('forwarded')),
+                'frequently_forwarded': bool(conv.get('frequently_forwarded')),
+                'location': conv.get('location_data'),
+                'contacts': conv.get('contacts_data'),
+                'interactive': conv.get('interactive_data'),
+                'referred_product': conv.get('referred_product'),
+                'order': conv.get('order_data'),
+            }
+            # Drop None/empty values to keep response payloads small
+            entry = {k: v for k, v in entry.items()
+                     if v is not None and v != [] and v != {}}
+            formatted_conversations.append(entry)
 
         return JsonResponse(formatted_conversations, safe=False)
 
     except Exception as e:
-        print("Error while fetching conversation data:", e)
+        logger.error(f"Error while fetching conversation data: {e}", exc_info=True)
         return JsonResponse({'error': str(e)}, status=500)
 
 
