@@ -17,6 +17,12 @@ from django.contrib import admin
 from django.urls import path
 from django.urls.conf import include
 from contacts import views as cviews
+from contacts import lead_tools_views as ltv
+from contacts import reengage_views as rev
+from contacts import autotag_views as atv
+from contacts import export_api
+from contacts import shortlink
+from contacts import tenant_switch
 from interaction import views as inviews
 from simplecrm import Register_login as Reg
 from simplecrm import ingestexcel as ingex
@@ -37,7 +43,7 @@ from rest_framework.routers import DefaultRouter
 from communication import insta_msg as imsg 
 from communication import views as commviews
 from communication import sentiment as commsenti
-from simplecrm.auth_oauth import oauth_token
+from simplecrm.auth_oauth import oauth_token, exchange_token
 from shop import views as shop_views
 from helpers import tables
 from orders import views as orderviews
@@ -70,11 +76,20 @@ urlpatterns = [
     path('register-unified/', Reg.register_unified, name='register_unified'),
     path('validate-invite-code/', Reg.validate_invite_code, name='validate_invite_code'),
     path('register-google/', Reg.register_google, name='register_google'),
+    path('login-google/', Reg.login_google, name='login_google'),
     path('invite-codes/', tenview.manage_invite_codes, name='manage_invite_codes'),
     path('contacts/', cviews.ContactListCreateAPIView.as_view(), name='contact-list-create'),
     path('contact/customfield', cviews.ContactcustomfieldAPIView.as_view(), name='contact-webhook'),
     path('get-contacts/', cviews.get_contacts_sql),
     path('contacts/<int:pk>/', cviews.ContactDetailAPIView.as_view(), name='contact-detail'),
+    path('export-contacts/', ltv.ExportContactsExcelView.as_view(), name='export-contacts'),
+    path('contacts/<int:pk>/tag/', ltv.ContactTagView.as_view(), name='contact-tag'),
+    path('reengage/run', rev.ReengageRunView.as_view(), name='reengage-run'),
+    path('auto-tag', atv.AutoTagView.as_view(), name='auto-tag'),
+    path('nuren-export/messages/', export_api.export_messages, name='nuren-export-messages'),
+    path('s/<str:slug>', shortlink.follow, name='shortlink'),
+    path('switch-tenant/options', tenant_switch.SwitchOptionsView.as_view(), name='switch-tenant-options'),
+    path('switch-tenant', tenant_switch.SwitchTenantView.as_view(), name='switch-tenant'),
     path('contacts_by_tenant/', cviews.ContactByTenantAPIView.as_view(), name='contact-by-tenant'),
     path('update-contacts/', cviews.UpdateContactAPIView.as_view(), name="update-contact-add-bgid"),
     path('excel-column/', getxcol.get_excel_columns, name='column_excel'),
@@ -157,6 +172,8 @@ urlpatterns = [
     path('broadcast-groups/<int:group_id>/', BroadcastGroupDetailView.as_view(), name='broadcast-group-detail'),
     path('message-stat/', message_stats.MessageStatisticsView.as_view(), name = 'message_statistics'),
     path('individual_message_statistics/', message_stats.IndividualMessageStatisticsView.as_view(), name='individual_message_statistics_list'),  # For listing and creating
+    path('broadcast-analytics/', message_stats.broadcast_analytics, name='broadcast-analytics'),  # Aggregated delivery/read/failed rates per bulk send
+    path('broadcast-recipients/', message_stats.broadcast_recipients, name='broadcast-recipients'),  # Per-campaign recipient drill-down
     path('refresh-status/', message_stats.refresh_status, name="refresh-status"),
     path('get-tenant-details/', tenview.tenant_detail, name = 'get-tenant'),
     path('subscriptions/create/', sub_views.createSubscription),
@@ -174,6 +191,7 @@ urlpatterns = [
     path('health/', simviews.health_check),
     path('wabits/',wabits.flow_json_view,name='flow-json'),
     path("oauth/token/", oauth_token),
+    path("exchange-token/", exchange_token),
     path('interviews/', include('interviews.urls')),
 ]
 urlpatterns += router.urls

@@ -539,6 +539,36 @@ def insert_whatsapp_tenant_data(request):
             node_template_id = data.get('node_template_id')
             use_v2 = data.get('use_flow_v2', False)  # Frontend flag for new mode
 
+            # Onboarding data-upsert path: node's /login-flow posts here with
+            # firstInsert=false when a number is connected via the "already
+            # connected" (skip-registration) flow. In that case there is no
+            # node_template_id -- it's a data insert, not a flow setup. Create
+            # the WhatsappTenantData row if it's missing (or refresh creds if it
+            # exists) instead of failing on NodeTemplate.objects.get(id=None).
+            if not node_template_id:
+                if not all([business_phone_number_id, access_token, account_id]):
+                    return JsonResponse({'status': 'error', 'message': 'Missing required fields'}, status=400)
+                record = WhatsappTenantData.objects.filter(tenant_id=tenant_id).first()
+                if record:
+                    record.business_phone_number_id = business_phone_number_id
+                    record.access_token = access_token
+                    record.business_account_id = account_id
+                    if hop_nodes is not None:
+                        record.hop_nodes = hop_nodes
+                    record.save()
+                    created = False
+                else:
+                    record = WhatsappTenantData.objects.create(
+                        business_phone_number_id=business_phone_number_id,
+                        access_token=access_token,
+                        business_account_id=account_id,
+                        tenant=tenant,
+                        hop_nodes=hop_nodes
+                    )
+                    created = True
+                reset_fastapi_cache(business_phone_number_id=business_phone_number_id)
+                return JsonResponse({'status': 'success', 'bpid': record.business_phone_number_id, 'created': created})
+
             node_template = NodeTemplate.objects.get(id = node_template_id)
             node_data = node_template.node_data
             flow_name = node_template.name
@@ -987,7 +1017,12 @@ def update_message_status(request):
 
     """
     View to queue message status updates for async processing
-    
+
+    Also performs a direct, inline update of interaction_conversation.status
+    keyed on wa_message_id so the chat-UI read-receipt ticks update even when
+    Celery is down. The legacy `whatsapp_message_id` row still gets updated
+    by the Celery task for callers that depend on it.
+
     :param request: HTTP request
     :return: JSON response with task status
     """
@@ -996,28 +1031,71 @@ def update_message_status(request):
             data = json.loads(request.body)
         except json.JSONDecodeError:
             return JsonResponse({'error': 'Invalid JSON format'}, status=400)
-        
+
         required_fields = ['message_id', 'timestamp']
         if not all(data.get(field) for field in required_fields):
             return JsonResponse({'error': 'Missing required fields'}, status=400)
         raw_time = data['timestamp']
         data['timestamp'] = convert_time(raw_time)
-        
+
+        # --- Inline update of the conversation row (synchronous; no Celery) ---
+        # Pick the strongest status flag set on this event. Meta status events
+        # have at most one of: is_sent / is_delivered / is_read / is_failed.
+        wa_msg_id = data.get('message_id')
+        new_status = None
+        if data.get('is_failed'):
+            new_status = 'failed'
+        elif data.get('is_read'):
+            new_status = 'read'
+        elif data.get('is_delivered'):
+            new_status = 'delivered'
+        elif data.get('is_sent'):
+            new_status = 'sent'
+
+        if wa_msg_id and new_status:
+            try:
+                from interaction.models import Conversation as InteractionConversation
+                from django.utils import timezone as _tz
+                # Status only advances forwards: read > delivered > sent. If a
+                # late "sent" event arrives after we already saw "read", keep
+                # the stronger status.
+                _RANK = {'sent': 1, 'delivered': 2, 'read': 3, 'failed': 4, 'deleted': 4}
+                qs = InteractionConversation.objects.filter(wa_message_id=wa_msg_id)
+                for row in qs:
+                    current_rank = _RANK.get(row.status, 0)
+                    new_rank = _RANK.get(new_status, 0)
+                    if new_rank > current_rank:
+                        row.status = new_status
+                        row.status_updated_at = _tz.now()
+                        if new_status == 'failed' and data.get('error_code'):
+                            try:
+                                row.status_error_code = int(data['error_code'])
+                            except (TypeError, ValueError):
+                                pass
+                        row.save(update_fields=['status', 'status_updated_at', 'status_error_code'])
+            except Exception as inline_err:
+                # Don't fail the whole webhook just because the inline update
+                # tripped — the Celery task will eventually catch up.
+                logger.warning(f"Inline Conversation.status update failed: {inline_err}")
+
         message_payload = {
             'message_id': data.get('message_id'),
             'data': data,
             'tenant_id': request.headers.get('X-Tenant-Id')
         }
 
-        # Enqueue the task
-        print("Message Payload: ", message_payload)
-        task_1 = process_message_status.delay(message_payload)
-        # task_2 = process_new_set_status.delay(message_payload)
+        # Enqueue the legacy task (best-effort; may no-op if Celery is down)
+        try:
+            task_1 = process_message_status.delay(message_payload)
+            task_id = task_1.id
+        except Exception as celery_err:
+            logger.warning(f"Celery enqueue failed (legacy whatsapp_message_id update skipped): {celery_err}")
+            task_id = None
 
         return JsonResponse({
-            'message': 'Status update queued', 
-            'task1_id': task_1.id,
-            # 'task2_id': task_2.id
+            'message': 'Status update queued',
+            'task1_id': task_id,
+            'conversation_updated_to': new_status,
         }, status=202)
 
     except Exception as e:

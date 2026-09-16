@@ -14,6 +14,8 @@ SERVICE_KEYS = {
 }
 
 EXCLUDED_PATHS = [
+    "/s/",  # public short-link redirector
+    "/nuren-export/",  # self-authenticates via X-Export-Key (scoped export)
     "/login/",
     "/logout/",
     "/register/",
